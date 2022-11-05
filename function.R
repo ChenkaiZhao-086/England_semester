@@ -333,3 +333,37 @@ get.index <- function(dat,
   result <- cbind(h_dat, h_index_dat[,2])
   return(result)
 }
+
+get.RR <- function(chain1 = NA,
+                   chain2 = NA,
+                   chain3 = NULL,
+                   chain4 = NULL,
+                   data = NA, 
+                   unit = c("1", "sd"), # RR per 1 unit or per sd unit
+                   ci = c(0.5, 0.025, 0.975),
+                   coef.num = NULL, # how many coef need to extract
+                   digits = 3) {
+  if (is.null(chain3)) {
+    beta.samples.combined <- rbind(chain1[["samples"]][["beta"]], chain2[["samples"]][["beta"]])
+  } else{
+    beta.samples.combined <- rbind(chain1[["samples"]][["beta"]], chain2[["samples"]][["beta"]], 
+                                   chain3[["samples"]][["beta"]], chain4[["samples"]][["beta"]])
+  }
+  
+  data <- data %>% as.data.frame()
+  res_names <- rownames(chain1[["summary.results"]])
+  res_matrix <- matrix(data = NA, nrow = coef.num, ncol = 3)
+  
+  if (unit == "1") {
+    for (i in 2:(coef.num+1)) {
+      res_matrix[i-1,] <- round(quantile(exp(1 * beta.samples.combined[ ,i]), ci),digits)
+    }
+  } else {
+    for (i in 2:(coef.num+1)) {
+      res_matrix[i-1,] <- round(quantile(exp(sd(data[,res_names[i]]) * beta.samples.combined[ ,i]), ci),digits)
+    }
+  }
+  rownames(res_matrix) <- rownames(chain1[["summary.results"]])[2:(coef.num+1)]
+  colnames(res_matrix) <- c(paste0(ci[1]*100,"%"), paste0(ci[2]*100,"%"), paste0(ci[3]*100,"%"))
+  return(res_matrix)
+}

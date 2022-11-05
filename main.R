@@ -245,13 +245,15 @@ X11(type = "cairo") # mac画图巨快！！！！
 
 Eng_shp <- st_read(dsn = "LAT_shp/Local_Authority_Districts__December_2019__Boundaries_UK_BFE.shp")
 crs_use <- st_crs(Eng_shp) # 得到shp文件中的crs
+Eng_shp <- st_transform(Eng_shp, crs = 4326) ## sf画图的大坑!!!如果不转换为4326投影(或统一的投影方式), 则无法正确裁切出伦敦
+
 
 ### add information to map data
 map_dat <- Eng_shp %>% 
   full_join(., hall_num, by = c("LAD19NM" = "LTLA_name")) %>% 
   mutate(hall_num = replace_na(hall_num, 0),
          hall_num = hall_num+1)
-map_dat <- st_transform(map_dat, crs = 4326) ## sf画图的大坑!!!如果不转换为4326投影(或统一的投影方式), 则无法正确裁切出伦敦
+map_dat <- st_transform(map_dat, crs = 4326) 
 
 ### Hall location
 hall_sf <- st_as_sf(Hall_LTLA_dat, coords = c('Hall_Long', 'Hall_Lat'), crs = 4326) %>%  # 将hall转化为坐标, crs是coordinate reference system，是参考坐标系，如果设置错误，则地图的投影会错误. 一般crs设置为4326，即WGS84不会出错, 属于全球通用, 另外需要注意，此处crs的数值和下一步transform时的crs不一样
@@ -769,7 +771,7 @@ HEI <- HEI_cam_dat %>%
 # "HEI_ID", "HEI_name", "Campus_ID", "Economic_Quality", "Business_Environment", "Education", "Health", "Safe_Security", "Social_Capital", "Environment", "retail_and_recreation_percent_change_from_baseline", "grocery_and_pharmacy_percent_change_from_baseline", "parks_percent_change_from_baseline", "transit_stations_percent_change_from_baseline", "workplaces_percent_change_from_baseline", "residential_percent_change_from_baseline" 
 #names(HEI)
 
-### 5.3 prepare case date, including case, growth rate and log GR
+### 5.3 prepare case date, including case, growth rate and log GR. Construct a basic model without sptial correlation
 case_dat <- ts_dat %>% 
   group_by(LTLA_ID) %>% 
   arrange(LTLA_ID, date) %>% 
@@ -803,13 +805,7 @@ HEI_all <- HEI %>%
   bind_rows(HEI_cornwall, HEI_london, HEI_hackry)
 
 
-# supposed decay fun type: y(t) = yf+(y0-yf)e^(-at) 0.6 OR 0.8
-#decay0 <- gen.decay(decay.period = 14, decay.fun = "0*x", incubation = 3) 
-#decay0.2 <- gen.decay(decay.period = 14, decay.fun = "1*exp(-0.2*x)", incubation = 3) 
-decay0.4 <- gen.decay(decay.period = 14, decay.fun = "1*exp(-0.4*x)", incubation = 6)
-#decay0.6 <- gen.decay(decay.period = 14, decay.fun = "1*exp(-0.6*x)", incubation = 3) 
-#decay0.8 <- gen.decay(decay.period = 14, decay.fun = "1*exp(-0.8*x)", incubation = 3)
-#decay1.0 <- gen.decay(decay.period = 14, decay.fun = "1+0*x", incubation = 3)
+decay0.4 <- gen.decay(decay.period = 14, decay.fun = "1*exp(-0.4*x)", incubation = 6) # supposed decay fun type: y(t) = yf+(y0-yf)e^(-at) 0.6 OR 0.8
 
 # get.index(dat = a.HEI, decay = decay)
 
@@ -822,17 +818,15 @@ HEI_dec0.4 <- do.call(rbind, by(HEI_all, HEI_all$LTLA_ID, get.index, decay0.4)) 
          week = if_else((wday(date) == 1 |wday(date) == 7), 1,0)) %>%
   filter(LTLA_ID != 43 & LTLA_ID != 333 & LTLA_ID != 340 & LTLA_ID != 342 & LTLA_ID != 360 , 
          date >= "2020-06-02" & date <= "2020-12-05") %>% 
-  arrange(LTLA_ID, date) %>% 
+  arrange(date, LTLA_ID) %>% 
   ungroup()
 
 summary(glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4))
+summary(glm(log_GR ~ Pop_Den_km2 * h_index + Prosperity + retail_gr + week, family = "gaussian", data = HEI_dec0.4)) 
 summary(glm(log_GR ~ Pop_Den_km2 + Prosperity * h_index + retail_gr + week, family = "gaussian", data = HEI_dec0.4)) 
-summary(glm(log_GR ~ Pop_Den_km2 + Prosperity + h_index + retail_gr + week, family = "gaussian", data = HEI_dec0.4)) 
 
 
-
-
-### prepare spatial data
+### 5.4 prepare spatial data and adjacent matrix
 Eng_shp <- st_transform(Eng_shp, crs = 4326) 
 
 Eng_shp_no_island <- Eng_shp %>% 
@@ -841,52 +835,46 @@ Eng_shp_no_island <- Eng_shp %>%
 
 W_adj <- poly2nb(Eng_shp_no_island, row.names = Eng_shp_no_island$LAD19NM) # This step could be slow, about 7 mins in this case
 W_mat <- nb2mat(W_adj, style = "B", zero.policy = T) # This step generate a 382*382 matrix
-#W_list <- nb2listw(W_adj, style = "B", zero.policy = T)
 
 
-model1 <- glm(log_GR2 ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail + week, family = "gaussian", data = HEI_dec0.6)
-summary(model1)
-model2 <- glm(log_GR2 ~ Pop_Den_km2 + Prosperity + h_index + gmc_retail + week, family = "gaussian", data = HEI_dec0.6)
-summary(model2)
-model3 <- glm(log_GR2 ~ Pop_Den_km2 + Prosperity + h_gr + retail_gr + week, family = "gaussian", data = HEI_dec0.6)
-summary(model3)
-model4 <- glm(log_GR2 ~ h_gr + week, family = "gaussian", data = HEI_dec0.6)
-summary(model4)
-model5 <- glm(log_GR2 ~ retail_gr  , family = "gaussian", data = HEI_dec0.6)
-summary(model5)
+### 5.5 Construct bayesian spatio-temporal model
 
-model6 <- glm(log_GR ~ Pop_Den_km2*h_gr +  Prosperity + retail_gr , family = "gaussian", data = HEI_dec0.6)
-summary(model6)
-
-model7 <- glm(log_GR ~ Pop_Den_km2+h_gr +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.6)
-summary(model7)
-# model1$residuals
-
-#a <- moran.mc(x = Eng_shp_no_island$OBJECTID, listw = W_list, nsim = 20000, na.action = na.exclude) # check spatio autocorrelation
-
-
+# default prior: normal prior N(0,100000) 
 ### ST.CARlinear Correlated linear time trends
 job::job({
-  chain1_linear <- ST.CARlinear(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", data = HEI_dec0.6, W = W_mat, burnin = 2000, n.sample = 22000, thin = 100)
-  chain2_linear <- ST.CARlinear(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", data = HEI_dec0.6, W = W_mat, burnin = 2000, n.sample = 22000, thin = 100)
+  set.seed(139)
+  chain1_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
+  chain2_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
+  chain3_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
+  chain4_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
 }, title = "ST.CARlinear")
 
 
 ### ST.CARanova Spatio-temporal main effects and an interaction
 job::job({
-  chain1_anova <- ST.CARanova(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", data = HEI_dec0.6, W = W_mat, burnin = 2000, n.sample = 22000, thin = 100)
-  chain2_anova <- ST.CARanova(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", data = HEI_dec0.6, W = W_mat, burnin = 2000, n.sample = 22000, thin = 100)
+  set.seed(186)
+  chain1_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+  chain2_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+  chain3_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+  chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
 }, title = "ST.CARanova")
 
 ### ST.CARar Spatially autocorrelated first-order autoregressive process
 job::job({
-  chain_test <- ST.CARar(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", 
-                         data = HEI_dec0.6, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100, verbose = F)}, title = "ST.CARar1")
-job::job({
-    chain2 <- ST.CARar(formula = log_GR ~ GDP_pc + Pop_Den_km2 + Prosperity + h_index + gmc_retail, family = "gaussian", 
-                     data = HEI_dec0.6, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100, verbose = F)
-}, title = "ST.CARar2")
+  set.seed(1995)
+  chain1_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
+                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
+  chain2_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
+                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
+}, title = "ST.CARar1-2")
 
+job::job({
+  set.seed(922)
+  chain3_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
+                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
+  chain4_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
+                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
+}, title = "ST.CARar3-4")
 ### n.effect means effective number of independent samples; Geweke.diag is another MCMC convergence diagnostic that should lie between -2 and 2 to indicate convergence.
 
 #### Check convergence - traceplot
@@ -994,16 +982,6 @@ ggplot(data.frame(inequality, Year=names(inequality)), aes(x = factor(Year), y =
   scale_x_discrete(name = "Year", breaks=c(2002, 2005, 2008, 2011, 2014, 2017), labels=c("2002", "2005", "2008", "2011", "2014", "2017")) +
   scale_y_continuous(name = "Inequality") + 
   theme(text=element_text(size=16), plot.title=element_text(size=18, face="bold")) 
-
-
-
-
-
-
-
-
-
-
 
 
 
