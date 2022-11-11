@@ -25,6 +25,7 @@ library(rvest)
 library(jsonlite)
 library(epiR)
 library(RColorBrewer)
+library(tidybayes)
 
 
 
@@ -819,37 +820,42 @@ HEI_dec0.4 <- do.call(rbind, by(HEI_all, HEI_all$LTLA_ID, get.index, decay0.4)) 
   filter(LTLA_ID != 43 & LTLA_ID != 333 & LTLA_ID != 340 & LTLA_ID != 342 & LTLA_ID != 360 , 
          date >= "2020-06-02" & date <= "2020-12-05") %>% 
   arrange(date, LTLA_ID) %>% 
-  ungroup()
+  ungroup() %>% 
+  left_join(., hall_num)
+
 
 summary(glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4))
 summary(glm(log_GR ~ Pop_Den_km2 * h_index + Prosperity + retail_gr + week, family = "gaussian", data = HEI_dec0.4)) 
 summary(glm(log_GR ~ Pop_Den_km2 + Prosperity * h_index + retail_gr + week, family = "gaussian", data = HEI_dec0.4)) 
 
+#summary(glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4 %>% filter(hall_num > 0)))
+#summary(glm(log_GR ~ Pop_Den_km2 * h_index + Prosperity + retail_gr + week, family = "gaussian", data = HEI_dec0.4 %>% filter(hall_num > 0))) 
+#summary(glm(log_GR ~ Pop_Den_km2 + Prosperity * h_index + retail_gr + week, family = "gaussian", data = HEI_dec0.4 %>% filter(hall_num > 0))) 
+
+
+
+a <- glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
+b <- glm(log_GR ~ Pop_Den_km2 + Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
+summary(a)
+summary(b)
+exp(a$fitted.values - b$fitted.values)
 
 ### 5.4 prepare spatial data and adjacent matrix
 Eng_shp <- st_transform(Eng_shp, crs = 4326) 
 
 Eng_shp_no_island <- Eng_shp %>% 
-  filter(OBJECTID != 44 & OBJECTID != 50 & OBJECTID != 334 & OBJECTID != 341 & OBJECTID != 343 & OBJECTID != 361) # These locations are island, if do not remove these locations, the adjacent matrix will return an error
+  filter(!OBJECTID %in% c(44, 50, 334, 341, 343, 361)) # These locations are island, if do not remove these locations, the adjacent matrix will return an error
 ## !!!!! OBJECTID is not equal to LTLA_ID !!!!!
+
 
 W_adj <- poly2nb(Eng_shp_no_island, row.names = Eng_shp_no_island$LAD19NM) # This step could be slow, about 7 mins in this case
 W_mat <- nb2mat(W_adj, style = "B", zero.policy = T) # This step generate a 382*382 matrix
 
-
+ggplot() +
+  geom_sf(data = Eng_shp_no_island, size = 0.05)
 ### 5.5 Construct bayesian spatio-temporal model
 
 # default prior: normal prior N(0,100000) 
-### ST.CARlinear Correlated linear time trends
-job::job({
-  set.seed(139)
-  chain1_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
-  chain2_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
-  chain3_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
-  chain4_linear <- ST.CARlinear(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100)
-}, title = "ST.CARlinear")
-
-
 ### ST.CARanova Spatio-temporal main effects and an interaction
 job::job({
   set.seed(186)
@@ -859,46 +865,64 @@ job::job({
   chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
 }, title = "ST.CARanova")
 
-### ST.CARar Spatially autocorrelated first-order autoregressive process
-job::job({
-  set.seed(1995)
-  chain1_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
-                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
-  chain2_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
-                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
-}, title = "ST.CARar1-2")
+set.seed(9453)
+chain1_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+chain2_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
 
-job::job({
-  set.seed(922)
-  chain3_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
-                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
-  chain4_ar <- ST.CARar(formula = log_GR ~ Pop_Den_km2 + h_index + Prosperity + retail_gr +week, family = "gaussian", 
-                        data = HEI_dec0.4, W = W_mat, AR = 1, burnin = 20000, n.sample = 220000, thin = 100)
-}, title = "ST.CARar3-4")
+set.seed(5681)
+chain1_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+chain2_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
 ### n.effect means effective number of independent samples; Geweke.diag is another MCMC convergence diagnostic that should lie between -2 and 2 to indicate convergence.
 
 #### Check convergence - traceplot
-beta.sample <- mcmc.list(chain_test$samples$beta, chain2$samples$beta)
-plot(beta.sample)
-gelman.diag(beta.sample) #### Check convergence - Gelman-Rubin plot less than 1.1indicate good mixing of the chain
+beta.sample3 <- mcmc.list(chain1_anova$samples$beta, chain2_anova$samples$beta, chain3_anova$samples$beta, chain4_anova$samples$beta)
+plot(beta.sample3)
+gelman.diag(beta.sample3) #### Check convergence - Gelman-Rubin plot less than 1.1indicate good mixing of the chain
 
 #### Effects of covariates on disease risk
-beta.samples.combined <- rbind(chain_test$samples$beta, chain2$samples$beta)
-round(quantile(exp(sd(HEI_dec0.6$GDP_pc) * beta.samples.combined[ ,2]), c(0.5, 0.025, 0.975)),3)
-round(quantile(exp(sd(HEI_dec0.6$Pop_Den_km2) * beta.samples.combined[ ,3]), c(0.5, 0.025, 0.975)),3)
-round(quantile(exp(sd(HEI_dec0.6$Prosperity) * beta.samples.combined[ ,4]), c(0.5, 0.025, 0.975)),3)
-round(quantile(exp(sd(HEI_dec0.6$h_index) * beta.samples.combined[ ,5]), c(0.5, 0.025, 0.975)),3)
-round(quantile(exp(sd(HEI_dec0.6$gmc_retail) * beta.samples.combined[ ,6]), c(0.5, 0.025, 0.975)),3)
-### Here we use the standard deviation of each covariate as the increase ξ, because they represent realistic increases in each covariates value.
+get.RR(chain1 = chain1_anova, chain2 = chain2_anova, chain3 = chain3_anova, chain4 = chain4_anova, data = HEI_dec0.4, unit = "1", coef.num = 4)
+#get.RR(chain1 = chain1_linear, chain2 = chain2_linear, data = HEI_dec0.4, unit = "sd", coef.num = 4) ### Here we use the standard deviation of each covariate as the increase ξ, because they represent realistic increases in each covariates value.
+
+#get.RR(chain1 = chain1_ano_den_h, chain2 = chain2_ano_den_h, data = HEI_dec0.4, unit = "1", coef.num = 6)
+#get.RR(chain1 = chain1_ano_pro_h, chain2 = chain2_ano_pro_h, data = HEI_dec0.4, unit = "1", coef.num = 6)
+
+
+coef_mat <- t(rbind(chain1_anova[["samples"]][["beta"]], chain2_anova[["samples"]][["beta"]], 
+                    chain3_anova[["samples"]][["beta"]], chain4_anova[["samples"]][["beta"]])) %>% as.matrix()
+
+eff_all <- as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "h_index"]) %*% coef_mat[3,] + 
+  as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + 
+  as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] 
+  
+eff_noh <- as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + 
+  as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] 
+diff_eff <- eff_all-eff_noh
+
+eff <- t(apply(diff_eff, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
+
+
+
+
+
+
+
+
+
+
+
 
 
 
 #### Compute the risk distributions
 fitted.samples.combined <- rbind(chain_test$samples$fitted, chain2$samples$fitted)
+fitted.samples.combined <- rbind(chain1_anova[["samples"]][["fitted"]], chain2_anova[["samples"]][["fitted"]],chain3_anova[["samples"]][["fitted"]], chain4_anova[["samples"]][["fitted"]])
+fitted.samples.combined <- rbind(chain1_ar[["samples"]][["fitted"]], chain2_ar[["samples"]][["fitted"]],chain3_ar[["samples"]][["fitted"]], chain4_ar[["samples"]][["fitted"]])
+
+
 n.samples <- nrow(fitted.samples.combined)
 n.all <- ncol(fitted.samples.combined)
-risk.samples.combined <- fitted.samples.combined / matrix(rep(HEI_dec0.6$log_GR, n.samples), nrow=n.samples, ncol=n.all, byrow=TRUE) 
-
+df04 <- HEI_dec0.4$log_GR %>% as.data.frame()
+risk.samples.combined <- chain1_ano_den_h[["samples"]][["fitted"]] / matrix(rep(HEI_dec0.4$log_GR,1), nrow=2000, ncol=ncol(chain1_ano_den_h[["samples"]][["fitted"]]), byrow=TRUE) 
 
 #### Compute the areal unit average risk for each year
 N <- length(table(HEI_dec0.6$date))
@@ -907,6 +931,7 @@ for(i in 1:n.samples)
 {
   risk.trends[i, ] <- tapply(risk.samples.combined[i, ], HEI_dec0.6$date, mean)
 }
+
 
 
 #### Plot the average risk trends
@@ -1013,3 +1038,7 @@ x11.save(
 
 
 
+HEI_dec0.4 %>% 
+  ggplot() +
+  geom_point(aes(x = date, y = log_GR))
+  geom_jitter(aes(x = date, y = log_GR))

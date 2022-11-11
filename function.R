@@ -46,7 +46,7 @@ x11.save <- function(fig = fig,
   plot(fig)
   dev.copy2pdf(file = file, width = w, height = h, out.type = "pdf")
   dev.off
-}
+} # When change default graphic device from Quartz to Cairo, we can save plot by gg.save. It's seems we do not need this function anymore. By the way, open a separate Cairo window is much faster than the bottom right on mac
 
 # For match LTLA ----------------------------------------------------------
 
@@ -366,4 +366,41 @@ get.RR <- function(chain1 = NA,
   rownames(res_matrix) <- rownames(chain1[["summary.results"]])[2:(coef.num+1)]
   colnames(res_matrix) <- c(paste0(ci[1]*100,"%"), paste0(ci[2]*100,"%"), paste0(ci[3]*100,"%"))
   return(res_matrix)
+}
+
+
+get.risk <- function(chain1 = NA,
+                     chain2 = NA,
+                     chain3 = NULL,
+                     chain4 = NULL,
+                     data = NA, 
+                     ci = c(0.5, 0.025, 0.975)) {
+  if (is.null(chain3)) {
+    fitted.samples.combined <- rbind(chain1[["samples"]][["fitted"]], chain2[["samples"]][["fitted"]])
+  } else{
+    fitted.samples.combined <- rbind(chain1[["samples"]][["fitted"]], chain2[["samples"]][["fitted"]], 
+                                     chain3[["samples"]][["fitted"]], chain4[["samples"]][["fitted"]])
+  }
+  
+  data <- data %>% as.data.frame()
+  n.samples <- nrow(fitted.samples.combined)
+  n.all <- ncol(fitted.samples.combined)
+  ## compute the risk distribution
+  risk.samples.combined <- fitted.samples.combined / matrix(rep(data$log_GR, nrow(fitted.samples.combined)), 
+                                                            nrow=n.samples, 
+                                                            ncol=n.all, byrow=TRUE) 
+  
+  #### Compute the areal unit average risk for each day
+  risk.trends <- array(NA, c(n.samples, length(table(data$date))))
+  for(i in 1:n.samples)
+  {
+    risk.trends[i, ] <- tapply(risk.samples.combined[i, ], data$date, mean)
+  }
+  
+  #### Prepare data to plot the average risk trends
+  time.trends <- as.data.frame(t(apply(risk.trends, 2, quantile, ci))) %>% 
+    mutate(date=names(table(data$date)))
+  colnames(time.trends)[1:3] <- c("Median","LCI", "UCI")
+  
+  return(time.trends)
 }
