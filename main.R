@@ -901,51 +901,25 @@ diff_eff <- eff_all-eff_noh
 eff <- t(apply(diff_eff, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-#### Compute the risk distributions
-fitted.samples.combined <- rbind(chain_test$samples$fitted, chain2$samples$fitted)
-fitted.samples.combined <- rbind(chain1_anova[["samples"]][["fitted"]], chain2_anova[["samples"]][["fitted"]],chain3_anova[["samples"]][["fitted"]], chain4_anova[["samples"]][["fitted"]])
-fitted.samples.combined <- rbind(chain1_ar[["samples"]][["fitted"]], chain2_ar[["samples"]][["fitted"]],chain3_ar[["samples"]][["fitted"]], chain4_ar[["samples"]][["fitted"]])
-
-
-n.samples <- nrow(fitted.samples.combined)
-n.all <- ncol(fitted.samples.combined)
-df04 <- HEI_dec0.4$log_GR %>% as.data.frame()
-risk.samples.combined <- chain1_ano_den_h[["samples"]][["fitted"]] / matrix(rep(HEI_dec0.4$log_GR,1), nrow=2000, ncol=ncol(chain1_ano_den_h[["samples"]][["fitted"]]), byrow=TRUE) 
-
-#### Compute the areal unit average risk for each year
-N <- length(table(HEI_dec0.6$date))
-risk.trends <- array(NA, c(n.samples, N))
-for(i in 1:n.samples)
-{
-  risk.trends[i, ] <- tapply(risk.samples.combined[i, ], HEI_dec0.6$date, mean)
-}
-
-
-
 #### Plot the average risk trends
-time.trends <- as.data.frame(t(apply(risk.trends, 2, quantile, c(0.5, 0.025, 0.975))))
-time.trends <- time.trends %>% mutate(date=names(table(HEI_dec0.6$date)))
-colnames(time.trends)[1:3] <- c("Median","LCI", "UCI")
+dat_break <- seq.Date(from = as.Date("2020-06-02"),
+                      to = as.Date("2020-12-04"),
+                      by = "7 day")
+dat_label <- paste0("W", isoweek(dat_break))
 
-ggplot(time.trends, aes(x = factor(date), y = Median, group=1)) +
-  geom_line(col="red") + 
-  geom_line(aes(x=factor(date), y=LCI), col="red", lty=2) +
-  geom_line(aes(x=factor(date), y=UCI), col="red", lty=2) + 
-  scale_x_discrete(name = "Year", breaks=c(2002, 2005, 2008, 2011, 2014, 2017), labels=c("2002", "2005", "2008", "2011", "2014", "2017")) +
-  scale_y_continuous(name = "Risk") + 
-  theme(text=element_text(size=16), plot.title=element_text(size=18, face="bold")) 
+
+HEI_dec0.4 %>% 
+  bind_cols(.,eff) %>%
+  filter(LTLA_ID == 296) %>% 
+  ggplot() +
+  geom_line(aes(x=as.Date(date), y=`50%`)) +
+  geom_ribbon(aes(x=as.Date(date), ymin=`2.5%`, ymax=`97.5%`), alpha=0.1) +
+  scale_x_date(name = "Week", breaks = dat_break, labels = dat_label, expand = c(0,0)) +
+  scale_y_continuous(name = "Effect of h-index") + 
+  theme_classic() + 
+  theme(axis.text = element_text(size = 16, colour = "black"),
+        axis.title = element_text(size = 18, colour = "black"),
+        plot.title = element_text(size = 18, colour = "black"))
 
 
 #### Spatial pattern in disease risk in the last year - mean and PEP
@@ -959,55 +933,7 @@ residuals2010.LA$risk.2010 <- summary(risk.2010)
 residuals2010.LA$pep.2010 <- pep.2010
 residuals2010.LA.ll <- spTransform(residuals2010.LA, CRS("+proj=longlat +datum=WGS84 +no_defs"))
 
-Eng_shp_no_island$risk.2010 <- risk.2010
-residuals2010.LA.ll <- Eng_shp_no_island
-  spTransform(Eng_shp_no_island, crs=4326)
-
-  Eng_shp_no_island
-
 colours <- colorNumeric(palette = "YlOrBr", domain = residuals2010.LA.ll@data$risk.2010, reverse=FALSE)
-leaflet(data=residuals2010.LA.ll) %>% 
-  addTiles() %>% 
-  addPolygons(fillColor = ~colours(risk.2010), 
-              color="",
-              fillOpacity = 0.7, weight = 1, smoothFactor = 0.5,
-              opacity = 1.0) %>%
-  addLegend(pal = colours, values = risk.2010, 
-            opacity = 1, title="Risk") %>%
-  addScaleBar(position="bottomleft")
-
-ggplot(Eng_shp_no_island) +
-  geom_sf(data = Eng_shp_no_island, aes(fill = risk.2010), size = 0.07) +
-  scale_fill_gradientn(name = "Log growth rate", colors=c(low_col(10), high_col(50)), 
-                       breaks = c(0, 1, 2, 3), labels = c("0", "1", "2", "3")) +
-  theme_minimal() +
-  theme(panel.grid = element_blank(),
-        panel.background = element_blank(), 
-        text = element_text(size = 16),
-        axis.title = element_blank())
-
-colours <- colorNumeric(palette = "YlOrBr", domain = residuals2010.LA.ll@data$pep.2010, reverse=FALSE)
-leaflet(data=residuals2010.LA.ll) %>% 
-  addTiles() %>% 
-  addPolygons(fillColor = ~colours(pep.2010), 
-              color="",
-              fillOpacity = 0.7, weight = 1, smoothFactor = 0.5,
-              opacity = 1.0) %>%
-  addLegend(pal = colours, values = pep.2010, 
-            opacity = 1, title="PEP") %>%
-  addScaleBar(position="bottomleft")
-
-
-
-#### Compute the median risk for each area
-risk.median <- apply(risk.samples.combined, 2, median)
-inequality <- tapply(risk.median, dat.ordered$Year, IQR)
-ggplot(data.frame(inequality, Year=names(inequality)), aes(x = factor(Year), y = inequality, group=1)) +
-  geom_line(col="red") + 
-  scale_x_discrete(name = "Year", breaks=c(2002, 2005, 2008, 2011, 2014, 2017), labels=c("2002", "2005", "2008", "2011", "2014", "2017")) +
-  scale_y_continuous(name = "Inequality") + 
-  theme(text=element_text(size=16), plot.title=element_text(size=18, face="bold")) 
-
 
 
 ### plot England map ---
@@ -1035,10 +961,3 @@ x11.save(
           legend.text = element_text(size = 10),
           legend.box.just = "center"), 
   file = "outputs/England.pdf", width = 8, height = 10)
-
-
-
-HEI_dec0.4 %>% 
-  ggplot() +
-  geom_point(aes(x = date, y = log_GR))
-  geom_jitter(aes(x = date, y = log_GR))

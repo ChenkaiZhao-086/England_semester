@@ -387,8 +387,7 @@ get.risk <- function(chain1 = NA,
   n.all <- ncol(fitted.samples.combined)
   ## compute the risk distribution
   risk.samples.combined <- fitted.samples.combined / matrix(rep(data$log_GR, nrow(fitted.samples.combined)), 
-                                                            nrow=n.samples, 
-                                                            ncol=n.all, byrow=TRUE) 
+                                                            nrow=n.samples, ncol=n.all, byrow=TRUE) 
   
   #### Compute the areal unit average risk for each day
   risk.trends <- array(NA, c(n.samples, length(table(data$date))))
@@ -404,3 +403,4 @@ get.risk <- function(chain1 = NA,
   
   return(time.trends)
 }
+
