@@ -76,9 +76,11 @@ for (i in 1:length(psm_base_dat)) {
                                                    case = get.info(data = psm_base_dat[[i]], type = "case"), 
                                                    control = get.info(data = psm_base_dat[[i]], type = "control")),
                                 intervention_date = get.info(data = psm_base_dat[[i]], open_data = HEI_dat,type = "open"),
+                                ahead = 10,
                                 show.fig = F,
+                                save.fig = F,
+                                original = F,
                                 get.table = T,
-                                save.fig = T,
                                 path = paste0("outputs/ci_base/", names(psm_base_dat[i]), ".pdf"),
                                 model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
 }
@@ -96,9 +98,11 @@ for (i in 1:length(psm_nolondon_dat)) {
                                                        case = get.info(data = psm_nolondon_dat[[i]], type = "case"), 
                                                        control = get.info(data = psm_nolondon_dat[[i]], type = "control")),
                                     intervention_date = get.info(data = psm_nolondon_dat[[i]], open_data = HEI_dat,type = "open"),
+                                    ahead = 10,
                                     show.fig = F,
+                                    save.fig = F,
+                                    original = F,
                                     get.table = T,
-                                    save.fig = T,
                                     path = paste0("outputs/ci_nolondon/", names(psm_nolondon_dat[i]), ".pdf"),
                                     model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
 }
@@ -117,9 +121,11 @@ for (i in 1:length(psm_over2hall_dat)) {
                                                         case = get.info(data = psm_over2hall_dat[[i]], type = "case"), 
                                                         control = get.info(data = psm_over2hall_dat[[i]], type = "control")),
                                      intervention_date = get.info(data = psm_over2hall_dat[[i]], open_data = HEI_dat,type = "open"),
+                                     ahead = 10,
                                      show.fig = F,
+                                     save.fig = F,
+                                     original = F,
                                      get.table = T,
-                                     save.fig = T,
                                      path = paste0("outputs/ci_over2hall/", names(psm_over2hall_dat[i]), ".pdf"),
                                      model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
 }
@@ -137,9 +143,11 @@ ci_resul2 <- foreach (i = 1:length(psm_base_dat), rbind) %dopar% {
                                case = get.info(data = psm_base_dat[[i]], type = "case"), 
                                control = get.info(data = psm_base_dat[[i]], type = "control")),
             intervention_date = get.info(data = psm_base_dat[[i]], open_data = HEI_dat,type = "open"),
+            ahead = 10,
             show.fig = F,
+            save.fig = F,
+            original = F,
             get.table = T,
-            save.fig = T,
             path = paste0("outputs/ci_base/", names(psm_base_dat[i]), ".pdf"),
             model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
 }
@@ -202,9 +210,11 @@ job::job({
                                                             case = get.info(data = mat_nolondon[[i]], type = "case"), 
                                                             control = get.info(data = mat_nolondon[[i]], type = "control")),
                                          intervention_date = get.info(data = mat_nolondon[[i]], open_data = HEI_dat,type = "open"),
+                                         ahead = 10,
                                          show.fig = F,
+                                         save.fig = F,
+                                         original = F,
                                          get.table = T,
-                                         save.fig = T,
                                          path = paste0("outputs/ci_m_base_gr_nolon/", names(mat_nolondon[i]), ".pdf"),
                                          model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
   }
@@ -223,9 +233,11 @@ job::job({
                                                             case = get.info(data = mat_over2hall[[i]], type = "case"), 
                                                             control = get.info(data = mat_over2hall[[i]], type = "control")),
                                          intervention_date = get.info(data = mat_over2hall[[i]], open_data = HEI_dat,type = "open"),
+                                         ahead = 10,
                                          show.fig = F,
+                                         save.fig = F,
+                                         original = F,
                                          get.table = T,
-                                         save.fig = T,
                                          path = paste0("outputs/ci_m_base_gr_over2/", names(mat_over2hall[i]), ".pdf"),
                                          model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
   }
