@@ -41,11 +41,11 @@ CI.cal <- function(vector,
 # Save map ----------------------------------------------------------------
 x11.save <- function(fig = fig,
                  file = file,
-                 width = w,
-                 height = h) {
+                 width = width,
+                 height = height) {
   plot(fig)
-  dev.copy2pdf(file = file, width = w, height = h, out.type = "pdf")
-  dev.off
+  dev.copy2pdf(file = file, width = width, height = height, out.type = "pdf")
+  dev.off()
 } # When change default graphic device from Quartz to Cairo, we can save plot by gg.save. It's seems we do not need this function anymore. By the way, open a separate Cairo window is much faster than the bottom right on mac
 
 # For match LTLA ----------------------------------------------------------
@@ -69,22 +69,19 @@ prep.psm.dat <- function(data) {
 }
 
 
-m.match <- function(m_mat) {
+m.match <- function(m_mat, prop = 0.2) {
   
   case_data <- m_mat %>% filter(type == 1) %>% mutate(index1 = NA, index2 = NA, index3 = NA)
   control_data <- m_mat %>% filter(type == 0)
   
   for (i in 1:length(case_data$type)) {
-    mat <- which(between(control_data$Pop_Den_km2, case_data$Pop_Den_km2[i]*0.8, case_data$Pop_Den_km2[i]*1.2) &
-                   between(control_data$Prosperity, case_data$Prosperity[i]*0.8, case_data$Prosperity[i]*1.2) &
+    mat <- which(between(control_data$Pop_Den_km2, case_data$Pop_Den_km2[i]*(1-prop), case_data$Pop_Den_km2[i]*(1+prop)) &
+                   between(control_data$Prosperity, case_data$Prosperity[i]*(1-prop), case_data$Prosperity[i]*(1+prop)) &
                    control_data$N_num == case_data$N_num[i])
     mat1 <- m_mat[mat, "LTLA_ID"] %>% unlist() %>% unname()
     if (length(mat1) > 0) {
-      #set.seed(1)
       case_data$index1[i] <- as.numeric(sample(mat1, 3, replace = T)[1])
-      #set.seed(1)
       case_data$index2[i] <- as.numeric(sample(mat1, 3, replace = T)[2])
-      #set.seed(1)
       case_data$index3[i] <- as.numeric(sample(mat1, 3, replace = T)[3])
     } else{
       case_data$index1[i] <- 999
@@ -217,8 +214,10 @@ prep.Causal <- function(data = data,
   if (leng == 1) {
     casual_data <- cbind(case_dat, control_dat)
     if (all(casual_data[,1] == casual_data[,4])) { # check case and control
+      case_name <- casual_data[1,2]
       casual_data <- casual_data %>% dplyr::select(Date, y, contains("newCasesBy"))
-      return(arrange(casual_data, Date))
+      return(list(name = case_name,
+                  data = arrange(casual_data, Date)))
     }else{
       warning("!!! Check case and control date !!!")
     }
@@ -227,7 +226,8 @@ prep.Causal <- function(data = data,
       casual_data <- cbind(case_dat, control_dat)
       if (all(casual_data[,1] == casual_data[,4])) { # check case and control
         casual_data <- casual_data %>% dplyr::select(Date, y, contains("newCasesBy"))
-        return(arrange(casual_data, Date))
+        return(list(name = case_name,
+                    data = arrange(casual_data, Date)))
       }else{
         warning("!!! Check case and control date !!!")
       }
@@ -242,15 +242,21 @@ do.Causal <- function(start_date = NULL,
                       intervention_date = NULL,
                       end_date = NULL,
                       data = data,
-                      seed = 1,
-                      show.fig = T,
+                      seed = 2723,
+                      ahead = 0,
+                      original = F, # show original report 
                       get.table = F,
+                      raw.data = c("date", "series", F), # this option is used to select type of raw data output. "date" means data were aligning by date (the open date is't at same position). "series" means  data were aligning by open date.
+                      show.fig = T,
                       save.fig = F,
                       path = NULL,
                       ...) {
+  case_loca <- data[["name"]]
+  data <- data[["data"]]
   if (is.POSIXct(data[1,1]) | is.Date(data[1,1])) {
     start_date <- data[1,1]
     end_date <- data[length(data[,1]), 1]
+    time.points <- seq.Date(from = as.Date(start_date), to = as.Date(end_date), by = 1)
     x.date <- as.Date(data[,1])
     data <- zoo(data[,-1], x.date)
   } else {
@@ -261,6 +267,7 @@ do.Causal <- function(start_date = NULL,
   
   pre.period <- c(as.Date(start_date), as.Date(intervention_date))
   post.period <- c(as.Date(intervention_date)+1, as.Date(end_date))
+  timecheck <- between(time.points, as.Date(intervention_date)-ahead, as.Date(end_date))
   
   set.seed(seed)
   impact <- CausalImpact(data, pre.period, post.period, ...)
@@ -271,25 +278,225 @@ do.Causal <- function(start_date = NULL,
   }
   
   if (save.fig == T) {
-    ggsave(plot(impact), filename = path)
+    ggsave(plot(impact), filename = path, width = 7, height = 5)
+  }
+  
+  if (original == T) {
+    res_list <- table
   }
   
   if (get.table == T) {
     table <- data.frame(abs_eff = round(impact[["summary"]][["AbsEffect"]][1], 2),
-                     abs_lci = round(impact[["summary"]][["AbsEffect.lower"]][1], 2),
-                     abs_uci = round(impact[["summary"]][["AbsEffect.upper"]][1], 2),
-                     abs_sd = round(impact[["summary"]][["AbsEffect.sd"]][1], 2),
-                     relative_eff = round(impact[["summary"]][["RelEffect"]][1]*100, 2),
-                     rel_lci = round(impact[["summary"]][["RelEffect.lower"]][1]*100, 2),
-                     rel_uci = round(impact[["summary"]][["RelEffect.upper"]][1]*100, 2),
-                     rel_sd = round(impact[["summary"]][["RelEffect.sd"]][1]*100, 2))
-    return(table)
+                        abs_lci = round(impact[["summary"]][["AbsEffect.lower"]][1], 2),
+                        abs_uci = round(impact[["summary"]][["AbsEffect.upper"]][1], 2),
+                        abs_sd = round(impact[["summary"]][["AbsEffect.sd"]][1], 2),
+                        relative_eff = round(impact[["summary"]][["RelEffect"]][1]*100, 2),
+                        rel_lci = round(impact[["summary"]][["RelEffect.lower"]][1]*100, 2),
+                        rel_uci = round(impact[["summary"]][["RelEffect.upper"]][1]*100, 2),
+                        rel_sd = round(impact[["summary"]][["RelEffect.sd"]][1]*100, 2),
+                        int_date = intervention_date)
+    
+    res_list <- table
+  } 
+  
+  if (raw.data == "date") {
+    raw_mean <- as.data.frame(impact[["raw_mean"]]) %>% setNames(., time.points)
+    raw_sample <- as.data.frame(impact[["raw_sample"]]) %>% setNames(., time.points)
+    raw_mean <- raw_mean[,timecheck]
+    raw_sample <- raw_sample[,timecheck]
+    
+    res_list <- list(raw_mean = raw_mean,
+                     raw_sample = raw_sample)
+  } else if(raw.data == "series"){
+    raw_mean <- as.data.frame(impact[["raw_mean"]]) %>% setNames(., time.points)
+    raw_sample <- as.data.frame(impact[["raw_sample"]]) %>% setNames(., time.points)
+    raw_mean <- raw_mean[,timecheck]
+    raw_sample <- raw_sample[,timecheck]
+    
+    series_name <- paste0("V", 1:length(raw_mean))
+    raw_mean <- raw_mean %>% setNames(., series_name)
+    raw_sample <- raw_sample %>% setNames(., series_name)
+    
+    res_list <- list(raw_mean = raw_mean,
+                     raw_sample = raw_sample)
   } else {
-    return(impact)
+    
   }
+  
+  if (get.table == T & raw.data != F) {
+    res_list <- list(table = table,
+                     raw_mean = raw_mean,
+                     raw_sample = raw_sample)
+  }
+    return(res_list)
 } 
 
+combine.dat <- function(data, 
+                        length.dat, # this option is used to input the number of compared LTLA
+                        type = c("table", "raw_mean", "raw_sample"),
+                        select.length = NULL) { # this option is used to select a specific length of data e.g. 41(10 days before, 1 open and 30 days after opening) 
+  if (type == "table") {
+    table_list <- vector("list", length = length(length.dat))
+    for (i in 1:length(length.dat)) {
+      table_list[i] <- data[[i]][type]
+    }
+    result <- do.call(bind_rows, table_list)
+    record<-names(length.dat)
+    result <- cbind(record, result)
+  } else {
+    table_list <- vector("list", length = length(length.dat))
+    for (i in 1:length(length.dat)) {
+      table_list[i] <- data[[i]][type]
+    }
+    result <- do.call(bind_rows, table_list)
+  }
+  
+  if (is.null(select.length)) {
+    return(result)
+  } else {
+    result <- result[, 1:select.length]
+    return(result)
+  }
+}
 
+before.dat <- function(table, select.length) {
+  before_open <- vector("list", length = length(table$record))
+  for (i in 1:length(table$record)) {
+    before_open[[i]] <- LTLA_gr %>% 
+      filter(LTLA_name == table[i,"location"] & date >=  (as.Date(table[i,"int_date"])-10)) %>% 
+      dplyr::select(newCasesBySpecimenDate) %>% 
+      t() %>% as.data.frame()
+  }
+  before_open <- do.call(bind_rows, before_open)
+  before_open_meta <- apply(before_open, 2, FUN = function(x) quantile(x, c(0.5), na.rm = T))
+  before_open_meta <- before_open_meta[1:select.length]
+  return(before_open_meta)
+}
+
+cum.pred <- function(y.samples, point.pred, y, post.period.begin) {
+  
+  # Compute posterior mean
+  is.post.period <- seq_along(y) >= post.period.begin
+  cum.pred.mean.pre <- cumsum.na.rm(as.vector(y)[!is.post.period])
+  non.na.indices <- which(!is.na(cum.pred.mean.pre))
+  assert_that(length(non.na.indices) > 0)
+  last.non.na.index <- max(non.na.indices)
+  cum.pred.mean.post <- cumsum(point.pred[is.post.period]) + cum.pred.mean.pre[last.non.na.index]
+  cum.pred.mean <- c(cum.pred.mean.pre, cum.pred.mean.post)
+  
+  # Compute posterior interval
+  cum.pred.lower.pre <- cum.pred.mean.pre
+  cum.pred.upper.pre <- cum.pred.mean.pre
+  y.samples.cum.post <- t(apply(y.samples[, is.post.period, drop = FALSE], 1, cumsum)) + cum.pred.mean.pre[last.non.na.index]
+  
+  cum.pred.lower.post <- as.numeric(t(apply(y.samples.cum.post, 2, FUN = function(x) quantile(x, c(0.025), na.rm = T))))
+  cum.pred.upper.post <- as.numeric(t(apply(y.samples.cum.post, 2, FUN = function(x) quantile(x, c(0.975), na.rm = T))))
+  cum.pred.lower <- c(cum.pred.lower.pre, cum.pred.lower.post)
+  cum.pred.upper <- c(cum.pred.upper.pre, cum.pred.upper.post)
+  
+  # Put cumulative prediction together
+  cum.pred <- data.frame(cum.pred = cum.pred.mean, cum.pred.lower, cum.pred.upper)
+  
+  cum.pred$cum.pred <- cumsum.na.rm(y) - cum.pred$cum.pred
+  cum.pred$cum.pred.lower <- cumsum.na.rm(y) - cum.pred$cum.pred.lower
+  cum.pred$cum.pred.upper <- cumsum.na.rm(y) - cum.pred$cum.pred.upper
+  
+  return(cum.pred)
+}
+
+report.it <- function(data, length.dat) { # This func. is used to get meta table. The length is the number of compared group. 
+  raw_mean <- combine.dat(data = data, length.dat = length.dat, type = "raw_mean", select.length = 41)
+  mean_meta <- apply(raw_mean, 2, FUN = function(x) quantile(x, c(0.5), na.rm = T))
+  raw_sample <- combine.dat(data = data, length.dat = length.dat, type = "raw_sample", select.length = 41)
+  sample_meta <- t(apply(raw_sample, 2, FUN = function(x) quantile(x, c(0.025, 0.975), na.rm = T)))
+  meta_table <- data.frame(date = 1:41, mean_meta, sample_meta) %>% setNames(., c("date","median", "lci", "uci"))
+  
+  return(meta_table)
+}
+
+plot.it <- function(data, length.dat, report_table, title, save = F, path = path, width = NULL, height = NULL) {
+  
+  before_open <- before.dat(report_table, 41)
+  meta_table <- report.it(data, length.dat)
+  plot_table_original <- cbind(meta_table,before_open)
+  
+  f1 <- ggplot(plot_table_original, aes(x = date)) + 
+    geom_vline(xintercept = 11, size = 1.2, linetype = 3, colour = "#bc3b29") +
+    geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+    geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
+    geom_line(aes(y = before_open), size = 1.5, colour = "#ad002a", alpha = 0.7) +
+    geom_line(aes(y = median), size = 1.2, linetype = 2, colour = "#082243", alpha = 0.7) +
+    scale_x_continuous(name = "", breaks = seq(1,41, by=2), labels = c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,30,by=2)))) +
+    scale_y_continuous(name = "Instantaneous effect related to HEIs reopen", limits = c(-1,1)) + 
+    labs(tag = "A.") +
+    theme_bw() +
+    theme(axis.text = element_text(size = 14, colour = "black"),
+          axis.title = element_text(size = 16, colour = "black"),
+          plot.title = element_text(size = 18, colour = "black"),
+          plot.margin = unit(c(0.5,1,0.5,1),"cm"),
+          plot.tag = element_text(size = 18),
+          plot.tag.position = c(0, 1)) 
+  
+  raw_mean <- combine.dat(data = data, length.dat = length.dat, type = "raw_mean", select.length = 41)
+  mean_meta <- apply(raw_mean, 2, FUN = function(x) quantile(x, c(0.5), na.rm = T))
+  raw_sample <- combine.dat(data = data, length.dat = length.dat, type = "raw_sample", select.length = 41)
+  
+  #point.pred.lower <- as.numeric(t(apply(raw_sample, 2, FUN = function(x) quantile(x, c(0.025), na.rm = T))))
+  #point.pred.upper <- as.numeric(t(apply(raw_sample, 2, FUN = function(x) quantile(x, c(0.975), na.rm = T))))
+  #point.pred <- data.frame(point.pred = mean_meta, point.pred.lower, point.pred.upper)
+  
+  #plot_table_point <- data.frame(date = 1:41, median = before_open-point.pred$point.pred, lci = before_open - point.pred$point.pred.lower, uci = before_open - point.pred$point.pred.upper)
+  
+  
+  #f2 <- ggplot(plot_table_point, aes(x = date)) + 
+  #  geom_vline(xintercept = 11, size = 1.2, linetype = 3, colour = "#bc3b29") +
+  #  geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+  #  geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
+  #  geom_line(aes(y = before_open), size = 1.5, colour = "#ad002a", alpha = 0.7) +
+  #  geom_line(aes(y = median), size = 1.2, linetype = 2, colour = "#082243", alpha = 0.7) +
+  #  scale_x_continuous(name = "", breaks = seq(1,41, by=2), labels = c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,30,by=2)))) +
+  #  scale_y_continuous(name = "Relationship between reopen", limits = c(-1,1)) + 
+  #  labs(tag = "A.") +
+  #  theme_bw() +
+  #  theme(axis.text = element_text(size = 14, colour = "black"),
+  #        axis.title = element_text(size = 16, colour = "black"),
+  #        plot.title = element_text(size = 18, colour = "black"),
+  #        plot.margin = unit(c(0.5,1,0.5,1),"cm"),
+  #        plot.tag = element_text(size = 18),
+  #        plot.tag.position = c(0, 1)) 
+  
+
+  cum_table <- cum.pred(raw_sample, mean_meta, before_open, 12) # note here. The 12 means we will calculate cum effect from the next day of reopen. We also could calculate from the reopen day
+
+  
+  f2 <-  data.frame(date = 1:41, cum_table) %>% 
+    setNames(., c("date","median", "lci", "uci")) %>% 
+    ggplot(aes(x = date)) +
+    geom_vline(xintercept = 11, size = 1.2, linetype = 2, colour = "#bc3b29") +
+    geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+    geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
+    geom_line(aes(y = median), size = 2, colour = "#082243") +
+    scale_x_continuous(name = "Date", breaks = seq(1,41, by=2), labels = c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,30,by=2)))) +
+    scale_y_continuous(name = "Cumulative effect related to HEIs reopen", breaks = -3:5,limits = c(-3,5), expand = c(0,0)) + 
+    labs(tag = "B.") +
+    theme_bw() +
+    theme(axis.text = element_text(size = 14, colour = "black"),
+          axis.title = element_text(size = 16, colour = "black"),
+          plot.title = element_text(size = 18, colour = "black"),
+          plot.margin = unit(c(0.5,1,0.5,1),"cm"),
+          plot.tag = element_text(size = 18),
+          plot.tag.position = c(0, 1)) 
+  
+  finalplot <- f1/f2 + 
+    plot_annotation(title = title, 
+                    theme = theme(plot.title = element_text(size = 20, colour = "black"), 
+                                  plot.margin = unit(c(0.5,0.5,0.5,0.5),"cm")))
+  
+  if (save == T) {
+    ggsave(filename = path, finalplot, width = width, height = height, units = "in")
+  }
+  plot(finalplot)
+}
 
 # Auto correlation --------------------------------------------------------
 

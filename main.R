@@ -8,12 +8,17 @@ library(readxl)
 library(job) # free console
 library(sf)
 library(TTR) # calculate moving average
-library(CausalImpact)
+##library(CausalImpact)
+library(zoo)
+library(assertthat)
+library(bsts)
+library(BoomSpikeSlab)
+library(Boom)
+library(MASS)
 library(spdep)
 library(spDataLarge)
 library(CARBayesST)
 library(coda) # for MCMC analysis and diagnose
-library(parallel) # parallel computation in *apply family
 library(foreach) # parallel computation in for loop
 library(doParallel) # parallel computation in for loop
 library(finalfit)
@@ -25,11 +30,14 @@ library(rvest)
 library(jsonlite)
 library(epiR)
 library(RColorBrewer)
-library(tidybayes)
+library(patchwork)
+library(khroma)
 
 
 
 source("function.R")
+source("super_ci.R")
+
 stop()
 # 0. data import ---------------------------------------------------------
 
@@ -55,95 +63,6 @@ rt_dat <- read_csv("rt.dat.csv")
 gmr <- read_csv("data/2020_GB_Region_Mobility_Report.csv") %>% 
   mutate(Google = if_else(is.na(sub_region_2) == T, paste0(sub_region_1, "_"), paste(sub_region_1, sub_region_2, sep = "_"))) %>% 
   dplyr::select(Google, date, retail_and_recreation_percent_change_from_baseline, grocery_and_pharmacy_percent_change_from_baseline, parks_percent_change_from_baseline, transit_stations_percent_change_from_baseline, workplaces_percent_change_from_baseline, residential_percent_change_from_baseline)
-
-### tools ---
-{
-  ##Eng_ltla_case <- read_csv("data/raw/Eng_ltla_case.csv")
-  ##Eng_case <- Eng_ltla_case %>% 
-  #mutate(date = as.Date(date)) %>% 
-  #  filter(date >= "2020-06-01" & date <= "2020-12-06") %>% 
-  #  left_join(., LTLA_case_dat, by = c("areaName" = "LTLA_name")) %>% 
-  #  dplyr::select(areaCode.x, LTLA_ID, areaName, date, newCasesBySpecimenDate.x) %>% 
-  #  group_by(areaName, date) %>% 
-  #  distinct(areaName, date, .keep_all = T) %>% 
-  #  rename(areaCode = areaCode.x, CLTLA_name = areaName, newCasesBySpecimenDate = newCasesBySpecimenDate.x)
-  ##write_csv(Eng_case, "Eng_case.csv")
-} # expand data
-{
-  # prepare LTLA code, otherwise the memorary will exhaust
-  ##LTLA_code <- LTLA_case_dat %>% 
-  # dplyr::select(LTLA_ID, LTLA_name) %>% 
-  #  distinct(., .keep_all = T) %>% 
-  #  rename(areaName = LTLA_name)
-  
-  ##age_dat <- read_csv("ltla_age_demo.csv")
-  
-  ##Eng_age_dat <- age_dat %>% 
-  # mutate(date = as.Date(date)) %>% 
-  #  filter(date >= "2020-07-27" & date <= "2020-12-06") %>% 
-  # full_join(., LTLA_code) %>% 
-  #dplyr::select(areaCode, LTLA_ID, areaName, date, age, cases, rollingSum, rollingRate)
-  
-  ##write_csv(Eng_age_dat, "Eng_age_dat.csv")
-} # prepare age structure data
-
-
-# 0.1 get Rt data ---------------------------------------------------------
-
-linkage <- read_excel("data/raw/Linkage_data.xlsx") %>% dplyr::select(Map, Imperial)
-
-getRt <- full_join(LTLA_dat, linkage, by = c("LTLA_name" = "Map"))
-getRt[getRt$LTLA_name == "Cornwall and Isles of Scilly", "Imperial"] <- "Cornwall_and_Isles_of_Scilly.html"
-getRt[getRt$LTLA_name == "Hackney and City of London", "Imperial"] <- "Hackney_and_City_of_London.html"
-
-
-R.data <- do.call(rbind, lapply(getRt$Imperial, FUN = crawlOne))
-R.data <- R.data %>% 
-  mutate(date = as.Date(x, origin = "1970-01-01")) %>% # 数据最开始的一列是以数字记录的日期，需要进行转换
-  filter(date >= "2020-06-01" & date <= "2020-12-06") %>% 
-  dplyr::select(date, Imperial, contains("ci"))
-R.data1 <- R.data
-{
-  rt_dat <- read_excel("rt_data.xlsx") %>% 
-    dplyr::select(LTLA_name= area, Date, lci = Rt_2_5, rt = Rt_50, uci = Rt_97_5) %>% 
-    filter(LTLA_name != c("Hackney", "City of London", "Cornwall", "Isles of Scilly"),
-           Date >= "2020-07-13" & Date <= "2020-12-06") # Rt data 的分类与LTLA的分类方式不同，Table1暂时不做Rt
-} # the other type of Rt dataset
-write_csv(R.data, "dat1.csv")
-
-### sample Rt data
-#N.sample <- 1000
-#R.data1 <- R.data1[rep(1:nrow(R.data1), each = N.sample),]
-#R.data1$sample.id <- rep(1:N.sample, nrow(R.data1))
-
-set.seed(17725)
-R.data1$R.1 <- mapply(runif, n = 1,min = R.data1$ci.90_lower, max = R.data1$ci.60_lower)
-set.seed(17725)
-R.data1$R.2 <- mapply(runif, n = 1,min = R.data1$ci.60_lower, max = R.data1$ci.30_lower)
-set.seed(17725)
-R.data1$R.3 <- mapply(runif, n = 1,min = R.data1$ci.30_lower, max = R.data1$ci.30_upper)
-set.seed(17725)
-R.data1$R.4 <- mapply(runif, n = 1,min = R.data1$ci.30_upper, max = R.data1$ci.60_upper)
-set.seed(17725)
-R.data1$R.5 <- mapply(runif, n = 1,min = R.data1$ci.60_upper, max = R.data1$ci.90_upper)
-
-set.seed(17725)
-R.data1$sample.R <- mapply(reSample5, A = R.data1$R.1, B = R.data1$R.2, C = R.data1$R.3, D = R.data1$R.4, E = R.data1$R.5)
-
-## job::job({R.data1 <- read_csv("sampled_Rt.csv")})
-rt_dat <- R.data1 %>%  # type 1: sample 1 Rt from dataset
-  dplyr::select(date, Imperial, sample.R) %>% 
-  group_by(date, Imperial) %>% 
-  sample_n(., 1) %>% 
-  ungroup()
-
-Rt <- R.data1 %>% 
-  dplyr::select(date, Imperial, sample.R)
-rt_dat2 <- do.call(rbind, by(Rt, Rt[c("date", "Imperial")], FUN = CI.cal)) # type 2: calculate mean Rt from 1000 sample
-rt_dat <- rt_dat2 %>% 
-  full_join(., getRt) %>% 
-  dplyr::select(LTLA_name, Date = date, lci = lower, rt = est, uci = upper) %>% 
-  mutate(lci = as.numeric(lci), rt = as.numeric(rt), uci = as.numeric(uci))
 
 
 # 1.  Basic character -----------------------------------------------------
@@ -229,7 +148,7 @@ LTLA_dat_compare <- LTLA_dat_combine %>%
             Prop_p25 = round(quantile(Prosperity, 0.25, na.rm = T),2),
             Prop_p75 = round(quantile(Prosperity, 0.75, na.rm = T),2)) %>% 
   mutate(Case_ci = paste0(Case_m, " (", Case_p25, "-", Case_p75, ")"),
-         Rt_ci = paste0(Rt_m, "(", Rt_p25, "-", Rt_p75, ")"),
+         Rt_ci = paste0(Rt_m, " (", Rt_p25, "-", Rt_p75, ")"),
          GDP_ci = paste0(GDP_m, " (", GDP_p25, "-", GDP_p75, ")"),
          PD_ci = paste0(PD_m, " (", PD_p25, "-", PD_p75, ")"),
          prop_ci = paste0(Prop_m, " (", Prop_p25, "-", Prop_p75, ")")) %>% 
@@ -242,10 +161,10 @@ LTLA_dat_compare <- LTLA_dat_combine %>%
 
 ## 解决Mac画地图的一个兼容性方法：使用 X11(type = "cairo") 搭配进行绘图结果的查看. 导出时使用quartz配合 dev.off() 使用以上的方法，grom_polygon或geom_sf速读均很快
 
-X11(type = "cairo") # mac画图巨快！！！！
+#X11(type = "cairo") # mac画图巨快！！！！
 
 Eng_shp <- st_read(dsn = "LAT_shp/Local_Authority_Districts__December_2019__Boundaries_UK_BFE.shp")
-crs_use <- st_crs(Eng_shp) # 得到shp文件中的crs
+# crs_use <- st_crs(Eng_shp) # 得到shp文件中的crs (coordinate reference system)，是参考坐标系，如果设置错误，则地图的投影会错误. 一般crs设置为4326，即WGS84不会出错, 属于全球通用, 也可以设置为专有的
 Eng_shp <- st_transform(Eng_shp, crs = 4326) ## sf画图的大坑!!!如果不转换为4326投影(或统一的投影方式), 则无法正确裁切出伦敦
 
 
@@ -253,36 +172,34 @@ Eng_shp <- st_transform(Eng_shp, crs = 4326) ## sf画图的大坑!!!如果不转
 map_dat <- Eng_shp %>% 
   full_join(., hall_num, by = c("LAD19NM" = "LTLA_name")) %>% 
   mutate(hall_num = replace_na(hall_num, 0),
-         hall_num = hall_num+1)
-map_dat <- st_transform(map_dat, crs = 4326) 
+         hall_num = hall_num+1) %>% 
+  st_transform(., crs = 4326) 
 
 ### Hall location
-hall_sf <- st_as_sf(Hall_LTLA_dat, coords = c('Hall_Long', 'Hall_Lat'), crs = 4326) %>%  # 将hall转化为坐标, crs是coordinate reference system，是参考坐标系，如果设置错误，则地图的投影会错误. 一般crs设置为4326，即WGS84不会出错, 属于全球通用, 另外需要注意，此处crs的数值和下一步transform时的crs不一样
-  st_transform(crs = crs_use) # 这一语句可选，如果不裁切地图则需要添加这一句, 如果要裁切出伦敦的范围, 则截止于上一句转换为4326体系即可
+hall_sf <- st_as_sf(Hall_LTLA_dat, coords = c('Hall_Long', 'Hall_Lat'), crs = 4326) #将hall转化为坐标
 
 ### plot England map ---
 low_col <- colorRampPalette(c("#F6F6F6FF", "#E0B040FF"))
 high_col <- colorRampPalette(c("#E0B040FF", "#C87810FF"))
 
-x11.save(
-  ggplot() +
-    geom_sf(data = map_dat, aes(fill = hall_num), size = 0.05) +
-    scale_fill_gradientn(name = "Number of halls", colors=c(low_col(10), high_col(50)), 
-                         breaks = c(1, 20, 40, 60), labels = c("0", "20", "40", "60")) +
-    geom_sf(data = hall_sf, color = "#0f2f78", size = 0.3, alpha = 0.8) +
-    coord_sf() +
-    theme_minimal() +
-    theme(panel.grid = element_blank(),
-          panel.background = element_blank(), 
-          axis.text = element_blank(), 
-          axis.ticks = element_blank(), 
-          axis.title = element_blank(), 
-          legend.position = c(0.15,0.23),
-          legend.title.align = 0.5,
-          legend.title = element_text(face = "bold", size = 12),
-          legend.text = element_text(size = 10),
-          legend.box.just = "center"), 
-  file = "outputs/England.pdf", width = 8, height = 10)
+ggsave(ggplot() +
+         geom_sf(data = map_dat, aes(fill = hall_num), size = 0.05) +
+         scale_fill_gradientn(name = "Number of halls", colors=c(low_col(10), high_col(50)), 
+                              breaks = c(1, 20, 40, 60), labels = c("0", "20", "40", "60")) +
+         geom_sf(data = hall_sf, color = "#0f2f78", size = 0.3, alpha = 0.8) +
+         coord_sf() +
+         theme_minimal() +
+         theme(panel.grid = element_blank(),
+               panel.background = element_blank(), 
+               axis.text = element_blank(), 
+               axis.ticks = element_blank(), 
+               axis.title = element_blank(), 
+               legend.position = "right",
+               legend.title.align = 0.1,
+               legend.title = element_text(face = "bold", size = 12),
+               legend.text = element_text(size = 10),
+               legend.box.just = "center"), 
+       filename = "outputs/uk.pdf", width = 9, height = 14)
 
 
 ### plot London map (inside M25) ---
@@ -290,24 +207,25 @@ crop_factor <- st_bbox(c(xmin = -0.545479, xmax = 0.292020, ymax = 51.719041, ym
 map_dat_crop <- st_crop(map_dat, crop_factor)
 hall_sf_crop <- st_crop(hall_sf, crop_factor)
 
-x11.save(
-    ggplot(map_dat_crop) +
-      geom_sf(data = map_dat_crop, aes(fill = hall_num), size = 0.07) +
-      scale_fill_gradientn(name = "Number of halls", colors=c(low_col(10), high_col(50)), 
-                           breaks = c(1, 20, 40, 60), labels = c("0", "20", "40", "60")) +
-      geom_sf(data = hall_sf_crop, color = "#0f2f78", size = 0.3, alpha = 0.8) +
-      geom_sf_text(data = map_dat_crop, aes(label = LAD19NM), alpha = 0.6) +
-      #geom_label(data = map_dat_crop, aes(x = LONG, y = LAT,label = LAD19NM), size = 5) + # 另一种标记地名方法
-      #coord_sf(xlim = c(-0.545479,0.292020), ylim = c(51.254188,51.719041), expand = F, crs = 4326) + # 另一种裁切方式，不如直接在数据层面裁切渲染速读快
-      theme_minimal() +
-      theme(panel.grid = element_blank(),
-            panel.background = element_blank(), 
-            text = element_text(size = 16),
-            #axis.text = element_blank(), 
-            #axis.ticks = element_blank(), 
-            axis.title = element_blank(), 
-            legend.position = "none"), 
-    file = "outputs/London.pdf", width = 8, height = 8)
+ggsave(ggplot(map_dat_crop) +
+         geom_sf(data = map_dat_crop, aes(fill = hall_num), size = 0.07) +
+         scale_fill_gradientn(name = "Number of halls", colors=c(low_col(10), high_col(50)), 
+                              breaks = c(1, 20, 40, 60), labels = c("0", "20", "40", "60")) +
+         geom_sf(data = hall_sf_crop, color = "#0f2f78", size = 0.3, alpha = 0.8) +
+         geom_sf_text(data = map_dat_crop, aes(label = LAD19NM), alpha = 1) +
+         #geom_label(data = map_dat_crop, aes(x = LONG, y = LAT,label = LAD19NM), size = 5) + # 另一种标记地名方法
+         #coord_sf(xlim = c(-0.545479,0.292020), ylim = c(51.254188,51.719041), expand = F, crs = 4326) + # 另一种裁切方式，不如直接在数据层面裁切渲染速读快
+         theme_minimal() +
+         labs(title = "London") + 
+         theme(panel.grid = element_blank(),
+               panel.background = element_blank(), 
+               text = element_text(size = 16, face = "bold"),
+               axis.text.x = element_text(vjust = 1), 
+               axis.text.y = element_text(hjust = 0), 
+               axis.title = element_blank(), 
+               legend.position = "none"), 
+       filename = "outputs/london.pdf", width = 10, height = 10, device = "pdf")
+
 
 # dev.copy2pdf(file = "outputs/map_lon.pdf", width = 8, height = 8, out.type = "pdf")
 # dev.off()
@@ -444,116 +362,7 @@ LTLA_mat_hall <- LTLA_dat_combine %>%
   mutate(type = if_else(hall_num>=2, 1, 0))
 
 
-### Propensity Score Matching ----
-psm_base <- matchit(type ~ Pop_Den_km2 + Economic_Quality + Business_Environment + Education + Health + Safe_Security +
-                      Social_Capital + Environment + N_num, data = LTLA_mat, method = "nearest", distance = "glm", replace = T) # 在Matchit中，replace用于控制一个对照可否匹配于多个干预，ratio用于控制匹配比例
-
-
-psm_nolondon <- matchit(type ~ Pop_Den_km2 + Economic_Quality + Business_Environment + Education + Health + Safe_Security +
-                          Social_Capital + Environment + N_num, data = LTLA_mat_nolondon, method = "nearest", distance = "glm", replace = T)
-
-
-psm_over2hall <- matchit(type ~ Pop_Den_km2 + Economic_Quality + Business_Environment + Education + Health + Safe_Security +
-                           Social_Capital + Environment + N_num, data = LTLA_mat_hall, method = "nearest", distance = "glm", replace = F)
-
-summary(psm_base) 
-summary(psm_nolondon)
-summary(psm_over2hall)
-# Values of standardized mean differences and eCDF statistics close to zero and values of variance ratios close to one indicate good balance 
-# a standardised mean difference great than 0.1 can be considered as substantial difference
-#b <- match.data(a)
-
-#plot(psm_base, type = "jitter", interactive = F)
-#plot(summary(psm), abs = FALSE)
-#plot(psm_nolondon, type = "jitter", interactive = F)
-#plot(summary(psm_nolondon), abs = FALSE)
-#plot(psm_over2hall, type = "jitter", interactive = F)
-#plot(summary(psm_over2hall), abs = FALSE)
-
-
-psm_base_dat <- prep.psm.dat(psm_base)
-psm_nolondon_dat <- prep.psm.dat(psm_nolondon)
-psm_over2hall_dat <- prep.psm.dat(psm_over2hall)
-
-
-### Fit causal impact ----
-
-### Do casual impact ---
-{
-  #cas_dat <- prep.Causal(data = LTLA_case_dat, case = 1, control = c(249)) #case = 349, control = c(331,121)
-  #cas_dat <- cas_dat %>% dplyr::select(!Date)
-  
-  #impact <- do.Causal(data = cas_dat, 
-  #                    start_date = "2020-06-01", 
-  #                    intervention_date = "2020-09-14", 
-  #                    end_date = "2020-12-06",
-  #                    model.args = list(niter = 1000, nseasons = 7, season.duration = 1))  
-  #impact2 <- do.Causal(data = cas_dat, 
-  #                     intervention_date = "2020-09-14", 
-  #                     model.args = list(niter = 1000, nseasons = 7, season.duration = 1)) # type 2, need dataset include date
-} # test Causal code
-
-
-## base data
-ci_psm_base <- vector("list", length = length(psm_base_dat))
-for (i in 1:length(psm_base_dat)) {
-  ci_psm_base[[i]] <- names(psm_base_dat[i])
-  ci_psm_base[[i]] <- do.Causal(data = prep.Causal(data = LTLA_case_dat, 
-                                                   case = get.info(data = psm_base_dat[[i]], type = "case"), 
-                                                   control = get.info(data = psm_base_dat[[i]], type = "control")),
-                                intervention_date = get.info(data = psm_base_dat[[i]], open_data = HEI_dat,type = "open"),
-                                show.fig = F,
-                                get.table = T,
-                                save.fig = T,
-                                path = paste0("outputs/ci_base/", names(psm_base_dat[i]), ".pdf"),
-                                model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-}
-ci_psm_base <- do.call(rbind, ci_psm_base)
-record <- names(psm_base_dat)
-ci_psm_base<-cbind(record, ci_psm_base)
-write_csv(ci_psm_base, "ci_result_allLTLA_5000iter.csv")
-
-
-## no London data
-ci_psm_nolondon <- vector("list", length = length(psm_nolondon_dat))
-for (i in 1:length(psm_nolondon_dat)) {
-  ci_psm_nolondon[[i]] <- names(psm_nolondon_dat[i])
-  ci_psm_nolondon[[i]] <- do.Causal(data = prep.Causal(data = LTLA_case_dat, 
-                                                       case = get.info(data = psm_nolondon_dat[[i]], type = "case"), 
-                                                       control = get.info(data = psm_nolondon_dat[[i]], type = "control")),
-                                    intervention_date = get.info(data = psm_nolondon_dat[[i]], open_data = HEI_dat,type = "open"),
-                                    show.fig = F,
-                                    get.table = T,
-                                    save.fig = T,
-                                    path = paste0("outputs/ci_nolondon/", names(psm_nolondon_dat[i]), ".pdf"),
-                                    model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-}
-
-ci_psm_nolondon <- do.call(rbind, ci_psm_nolondon)
-record <- names(psm_nolondon_dat)
-ci_psm_nolondon<-cbind(record, ci_psm_nolondon)
-write_csv(ci_psm_nolondon, "ci_result_nolondon_5000iter.csv")
-
-
-## over 2 hall as case data 
-ci_psm_over2hall <- vector("list", length = length(psm_over2hall_dat))
-for (i in 1:length(psm_over2hall_dat)) {
-  ci_psm_over2hall[[i]] <- names(psm_over2hall_dat[i])
-  ci_psm_over2hall[[i]] <- do.Causal(data = prep.Causal(data = LTLA_case_dat, 
-                                                        case = get.info(data = psm_over2hall_dat[[i]], type = "case"), 
-                                                        control = get.info(data = psm_over2hall_dat[[i]], type = "control")),
-                                     intervention_date = get.info(data = psm_over2hall_dat[[i]], open_data = HEI_dat,type = "open"),
-                                     show.fig = F,
-                                     get.table = T,
-                                     save.fig = T,
-                                     path = paste0("outputs/ci_over2hall/", names(psm_over2hall_dat[i]), ".pdf"),
-                                     model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-}
-
-ci_psm_over2hall <- do.call(rbind, ci_psm_over2hall)
-record<-names(psm_over2hall_dat)
-ci_psm_over2hall <- cbind(record, ci_psm_over2hall)
-write_csv(ci_psm_over2hall, "ci_result_over2hall_5000iter.csv")
+### Fit causal impact ---
 
 
 ### If only want to save Fig and table, a parallel for loop is much faster 
@@ -573,84 +382,7 @@ ci_resul2 <- do.call(rbind, ci_resul2)
 record <- names(psm_base_dat)
 
 
-### Manual match ----
-m_mat <- LTLA_dat_combine %>% 
-  full_join(., region_num) %>% 
-  dplyr::select(!c("UTLA_CD", "UTLA_name", "LTLA_Lat", "LTLA_Long", "areaCode", "lci", "uci", "N_region", "rt")) %>% 
-  mutate(type = if_else(hall_num>0, 1, 0)) 
-
-case_data <- m_mat %>% filter(type == 1) %>% mutate(index1 = NA, index2 = NA, index3 = NA)
-control_data <- m_mat %>% filter(type == 0)
-
-
-for (i in 1:length(case_data$type)) {
-  mat <- which(between(control_data$Pop_Den_km2, case_data$Pop_Den_km2[i]*0.9, case_data$Pop_Den_km2[i]*1.1) &
-                 between(control_data$Prosperity, case_data$Prosperity[i]*0.9, case_data$Prosperity[i]*1.1) &
-                 control_data$N_num == case_data$N_num[i])
-  mat1 <- m_mat[mat, "LTLA_ID"] %>% unlist()
-  if (length(mat1) > 0) {
-    #set.seed(1)
-    case_data$index1[i] <- as.numeric(sample(mat1, 3, replace = T)[1])
-    #set.seed(1)
-    case_data$index2[i] <- as.numeric(sample(mat1, 3, replace = T)[2])
-    #set.seed(1)
-    case_data$index3[i] <- as.numeric(sample(mat1, 3, replace = T)[3])
-  } else{
-    case_data$index1[i] <- 999
-  }
-}
-
-con_name <- LTLA_dat_combine %>% 
-  mutate(c.LTLA_ID = LTLA_ID, c.LTLA_name = LTLA_name) %>% 
-  dplyr::select(c.LTLA_ID, c.LTLA_name)
-  
-  
-matched <- case_data %>% 
-  filter(index1 != 999) %>% 
-  mutate(subclass = 1:length(LTLA_ID), c.type = 0, c.LTLA_ID = index1,
-         k.LTLA_ID = LTLA_ID, k.LTLA_name = LTLA_name, k.type = type) %>% 
-  left_join(., con_name) %>% 
-  dplyr::select(subclass, k.LTLA_ID, k.LTLA_name, k.type, c.LTLA_ID, c.LTLA_name, c.type) %>% 
-  as.data.frame() %>% 
-  reshape(., direction = "long", 
-          varying = list(LTLA_ID = c(2,5), name = c(3,6), type = c(4,7)),
-          v.names = c("LTLA_ID", "LTLA_name", "type"),
-          idvar = "subclass") %>% 
-  dplyr::select(! time) %>% 
-  arrange(subclass, desc(type))
-
-m_name <- matched %>% 
-  distinct(., subclass, .keep_all = T) %>% 
-  transmute(matched = paste(subclass, LTLA_ID, LTLA_name, sep = "_")) %>%
-  as.data.frame() %>% .$matched
-
-matched <- setNames(split(matched, matched$subclass), m_name)
-
-
-## Manual data CI ----
-ci_m_base <- vector("list", length = length(matched))
-job::job({
-  for (i in 1:length(matched)) {
-    ci_m_base[[i]] <- names(matched[i])
-    ci_m_base[[i]] <- do.Causal(data = prep.Causal(data = LTLA_ma, 
-                                                   case = get.info(data = matched[[i]], type = "case"), 
-                                                   control = get.info(data = matched[[i]], type = "control")),
-                                intervention_date = get.info(data = matched[[i]], open_data = HEI_dat,type = "open"),
-                                show.fig = F,
-                                get.table = T,
-                                save.fig = T,
-                                path = paste0("outputs/ci_m_base/", names(matched[i]), ".pdf"),
-                                model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-  }
-}, title = "Moving average case")
-
-
-ci_m_base <- do.call(rbind, ci_m_base)
-record<-names(matched)
-ci_m_base <- cbind(record, ci_m_base)
-write_csv(ci_m_base, "ci_result_m_5000iter.csv")
-
-## Growth rate CI ----
+## Growth rate CI ---
 LTLA_rs
 LTLA_gr <- LTLA_rs %>% 
   group_by(LTLA_ID) %>% 
@@ -663,77 +395,108 @@ LTLA_gr <- LTLA_rs %>%
   drop_na() %>% 
   dplyr::select("areaCode", "LTLA_ID", "LTLA_name", "date", "newCasesBySpecimenDate")
 
+set.seed(1912)
+mat_base <- m.match(LTLA_mat, prop = 0.2)
+mat_nolondon <- m.match(LTLA_mat_nolondon, prop = 0.2)
+mat_over2hall <- m.match(LTLA_mat_hall, prop = 0.2)
 
-mat_base <- m.match(LTLA_mat)
-mat_nolondon <- m.match(LTLA_mat_nolondon)
-mat_over2hall <- m.match(LTLA_mat_hall)
-i <- 2
 
-## Manual data CI
+### Manual data CI and plot
+#reopen_names <- c(paste0("B",rev(1:10)), "Reopen", paste0("A",1:30))
+reopen_names <- c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,30,by=2)))
+### base group, 93 paired---
 ci_m_base_gr <- vector("list", length = length(mat_base))
-job::job({
-  for (i in 1:length(mat_base)) {
-    ci_m_base_gr[[i]] <- names(mat_base[i])
-    ci_m_base_gr[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
-                                                      case = get.info(data = mat_base[[i]], type = "case"), 
-                                                      control = get.info(data = mat_base[[i]], type = "control")),
-                                   intervention_date = get.info(data = mat_base[[i]], open_data = HEI_dat,type = "open"),
-                                   show.fig = F,
-                                   get.table = T,
-                                   save.fig = T,
-                                   path = paste0("outputs/ci_m_base_gr/", names(mat_base[i]), ".pdf"),
-                                   model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-  }
-}, title = "base")
-ci_m_base_gr <- do.call(rbind, ci_m_base_gr)
-record<-names(matched)
-ci_m_base_gr <- cbind(record, ci_m_base_gr)
-write_csv(ci_m_base_gr, "ci_m_base_gr_5000iter.csv")
+for (i in 1:length(mat_base)) { 
+  ci_m_base_gr[[i]] <- names(mat_base[i])
+  ci_m_base_gr[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
+                                                    case = get.info(data = mat_base[[i]], type = "case"), 
+                                                    control = get.info(data = mat_base[[i]], type = "control")),
+                                 intervention_date = get.info(data = mat_base[[i]], open_data = HEI_dat,type = "open"),
+                                 ahead = 10,
+                                 show.fig = F,
+                                 save.fig = T,
+                                 original = F,
+                                 get.table = T,
+                                 raw.data = "series",
+                                 path = paste0("outputs/ci_m_base_gr/", names(mat_base[i]), ".pdf"),
+                                 model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
+}  
+
+ci_m_base_gr_table<- combine.dat(ci_m_base_gr, mat_base, "table") %>% 
+  mutate(location = str_remove(.[,"record"], regex("\\d+\\_\\d+\\_")))
+#report.it(ci_m_base_gr, length.dat = mat_base)
+plot.it(ci_m_base_gr, length.dat = mat_base, report_table = ci_m_base_gr_table, title = "All matched LTLA", save = T, path = "outputs/allALRI.pdf", width = 12, height = 11)
+
+mat_base_out <- ci_m_base_gr_table %>% 
+  mutate(abs = paste0(format(abs_eff,2), " (", format(abs_lci,2), "-", format(abs_uci,2), ")"),
+         rel = paste0(format(relative_eff,2), " (", format(rel_lci,2), "-", format(rel_uci,2), ")")) %>% 
+  dplyr::select(location, int_date, abs, rel) %>% 
+  setNames(., c("LTLA name", "First reopen date", "Absolute effect median (95%CI)","Relative effect median (95%CI)"))
+write_csv(mat_base_out, "outputs/table/mat_base.csv")
 
 
+
+### exclude all LTLA located in London 
 ci_m_base_gr_nolon <- vector("list", length = length(mat_nolondon))
-job::job({
-  for (i in 1:length(mat_nolondon)) {
-    ci_m_base_gr_nolon[[i]] <- names(mat_nolondon[i])
-    ci_m_base_gr_nolon[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
-                                                            case = get.info(data = mat_nolondon[[i]], type = "case"), 
-                                                            control = get.info(data = mat_nolondon[[i]], type = "control")),
-                                         intervention_date = get.info(data = mat_nolondon[[i]], open_data = HEI_dat,type = "open"),
-                                         show.fig = F,
-                                         get.table = T,
-                                         save.fig = T,
-                                         path = paste0("outputs/ci_m_base_gr_nolon/", names(mat_nolondon[i]), ".pdf"),
-                                         model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-  }
-}, title = "no london")
-ci_m_base_gr_nolon <- do.call(rbind, ci_m_base_gr_nolon)
-record<-names(matched)
-ci_m_base_gr_nolon <- cbind(record, ci_m_base_gr_nolon)
-write_csv(ci_m_base_gr_nolon, "ci_m_base_gr_nolon_5000iter.csv")
+for (i in 1:length(mat_nolondon)) {
+  ci_m_base_gr_nolon[[i]] <- names(mat_nolondon[i])
+  ci_m_base_gr_nolon[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
+                                                          case = get.info(data = mat_nolondon[[i]], type = "case"), 
+                                                          control = get.info(data = mat_nolondon[[i]], type = "control")),
+                                       intervention_date = get.info(data = mat_nolondon[[i]], open_data = HEI_dat,type = "open"),
+                                       ahead = 10,
+                                       seed = 1902,
+                                       show.fig = F,
+                                       save.fig = T,
+                                       original = F,
+                                       get.table = T,
+                                       raw.data = "series",
+                                       path = paste0("outputs/ci_m_base_gr_nolon/", names(mat_nolondon[i]), ".pdf"),
+                                       model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
+}
+ci_m_base_gr_nolon_table<- combine.dat(ci_m_base_gr_nolon, mat_nolondon, "table") %>% 
+  mutate(location = str_remove(.[,"record"], regex("\\d+\\_\\d+\\_")))
+#report.it(ci_m_base_gr_nolon, length.dat = mat_nolondon)
+plot.it(ci_m_base_gr_nolon, length.dat = mat_nolondon, report_table = ci_m_base_gr_nolon_table, title = "Not include London (outside of M25)", save = T, path = "outputs/nolondon.pdf", width = 12, height = 11)
+
+mat_nolon_out <- ci_m_base_gr_nolon_table %>% 
+  mutate(abs = paste0(format(abs_eff,2), " (", format(abs_lci,2), "-", format(abs_uci,2), ")"),
+         rel = paste0(format(relative_eff,2), " (", format(rel_lci,2), "-", format(rel_uci,2), ")")) %>% 
+  dplyr::select(location, int_date, abs, rel) %>% 
+  setNames(., c("LTLA name", "First reopen date", "Absolute effect median (95%CI)","Relative effect median (95%CI)"))
+write_csv(mat_nolon_out, "outputs/table/mat_nolondon.csv")
 
 
+### find control in LTLA with over 2 halls
 ci_m_base_gr_over2 <- vector("list", length = length(mat_over2hall))
-job::job({
-  for (i in 1:length(mat_over2hall)) {
-    ci_m_base_gr_over2[[i]] <- names(mat_over2hall[i])
-    ci_m_base_gr_over2[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
-                                                            case = get.info(data = mat_over2hall[[i]], type = "case"), 
-                                                            control = get.info(data = mat_over2hall[[i]], type = "control")),
-                                         intervention_date = get.info(data = mat_over2hall[[i]], open_data = HEI_dat,type = "open"),
-                                         show.fig = F,
-                                         get.table = T,
-                                         save.fig = T,
-                                         path = paste0("outputs/ci_m_base_gr_over2/", names(mat_over2hall[i]), ".pdf"),
-                                         model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
-  }
-}, title = "over two hall")
+for (i in 1:length(mat_over2hall)) {
+  ci_m_base_gr_over2[[i]] <- names(mat_over2hall[i])
+  ci_m_base_gr_over2[[i]] <- do.Causal(data = prep.Causal(data = LTLA_gr, 
+                                                          case = get.info(data = mat_over2hall[[i]], type = "case"), 
+                                                          control = get.info(data = mat_over2hall[[i]], type = "control")),
+                                       intervention_date = get.info(data = mat_over2hall[[i]], open_data = HEI_dat,type = "open"),
+                                       ahead = 10,
+                                       seed = 1912,
+                                       show.fig = F,
+                                       save.fig = T,
+                                       original = F,
+                                       get.table = T,
+                                       raw.data = "series",
+                                       path = paste0("outputs/ci_m_base_gr_over2/", names(mat_over2hall[i]), ".pdf"),
+                                       model.args = list(niter = 5000, nseasons = 7, season.duration = 1))
+}
 
+ci_m_base_gr_over2_table<- combine.dat(ci_m_base_gr_over2, mat_over2hall, "table") %>% 
+  mutate(location = str_remove(.[,"record"], regex("\\d+\\_\\d+\\_")))
+#report.it(ci_m_base_gr_over2, length.dat = mat_over2hall)
+plot.it(ci_m_base_gr_over2, length.dat = mat_over2hall, report_table = ci_m_base_gr_over2_table, title = "Matched in LTLA with over one hall(s)", save = T, path = "outputs/over2.pdf", width = 12, height = 11)
 
-ci_m_base_gr_over2 <- do.call(rbind, ci_m_base_gr_over2)
-record<-names(matched)
-ci_m_base_gr_over2 <- cbind(record, ci_m_base_gr_over2)
-write_csv(ci_m_base_gr_over2, "ci_m_base_gr_over2_5000iter.csv")
-
+over2_out <- ci_m_base_gr_over2_table %>% 
+  mutate(abs = paste0(format(abs_eff,2), " (", format(abs_lci,2), "-", format(abs_uci,2), ")"),
+         rel = paste0(format(relative_eff,2), " (", format(rel_lci,2), "-", format(rel_uci,2), ")")) %>% 
+  dplyr::select(location, int_date, abs, rel) %>% 
+  setNames(., c("LTLA name", "First reopen date", "Absolute effect median (95%CI)","Relative effect median (95%CI)"))
+write_csv(over2_out, "outputs/table/over2.csv")
 
 
 # 5. Bayesian spatio-temporal ---------------------------------------------
@@ -834,15 +597,14 @@ summary(glm(log_GR ~ Pop_Den_km2 + Prosperity * h_index + retail_gr + week, fami
 
 
 
-a <- glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
-b <- glm(log_GR ~ Pop_Den_km2 + Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
-summary(a)
-summary(b)
-exp(a$fitted.values - b$fitted.values)
+#a <- glm(log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
+#b <- glm(log_GR ~ Pop_Den_km2 + Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4)
+#summary(a)
+#summary(b)
+#exp(a$fitted.values - b$fitted.values)
 
 ### 5.4 prepare spatial data and adjacent matrix
-Eng_shp <- st_transform(Eng_shp, crs = 4326) 
-
+#Eng_shp <- st_transform(Eng_shp, crs = 4326) 
 Eng_shp_no_island <- Eng_shp %>% 
   filter(!OBJECTID %in% c(44, 50, 334, 341, 343, 361)) # These locations are island, if do not remove these locations, the adjacent matrix will return an error
 ## !!!!! OBJECTID is not equal to LTLA_ID !!!!!
@@ -851,33 +613,31 @@ Eng_shp_no_island <- Eng_shp %>%
 W_adj <- poly2nb(Eng_shp_no_island, row.names = Eng_shp_no_island$LAD19NM) # This step could be slow, about 7 mins in this case
 W_mat <- nb2mat(W_adj, style = "B", zero.policy = T) # This step generate a 382*382 matrix
 
-ggplot() +
-  geom_sf(data = Eng_shp_no_island, size = 0.05)
+
 ### 5.5 Construct bayesian spatio-temporal model
 
 # default prior: normal prior N(0,100000) 
 ### ST.CARanova Spatio-temporal main effects and an interaction
 job::job({
-  set.seed(186)
-  chain1_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-  chain2_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-  chain3_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-  chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+  set.seed(526)
+  chain1_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+  chain2_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+  chain3_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+  chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
 }, title = "ST.CARanova")
 
 set.seed(9453)
-chain1_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-chain2_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-
-set.seed(5681)
-chain1_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
-chain2_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 20000, n.sample = 220000, thin = 100, interaction = T)
+chain1_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 220000, thin = 100, interaction = T)
+chain2_ano_den_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 * h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 220000, thin = 100, interaction = T)
+chain1_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 220000, thin = 100, interaction = T)
+chain2_ano_pro_h <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index *  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 220000, thin = 100, interaction = T)
 ### n.effect means effective number of independent samples; Geweke.diag is another MCMC convergence diagnostic that should lie between -2 and 2 to indicate convergence.
 
 #### Check convergence - traceplot
-beta.sample3 <- mcmc.list(chain1_anova$samples$beta, chain2_anova$samples$beta, chain3_anova$samples$beta, chain4_anova$samples$beta)
-plot(beta.sample3)
-gelman.diag(beta.sample3) #### Check convergence - Gelman-Rubin plot less than 1.1indicate good mixing of the chain
+beta.cov <- mcmc.list(chain1_anova$samples$beta, chain2_anova$samples$beta, chain3_anova$samples$beta, chain4_anova$samples$beta)
+#plot(beta.cov)
+x11.save(beta.cov, file = "outputs/beta_cov.pdf", width = 6, height = 6)
+gelman.diag(beta.cov) #### Check convergence - Gelman-Rubin plot less than 1.1indicate good mixing of the chain
 
 #### Effects of covariates on disease risk
 get.RR(chain1 = chain1_anova, chain2 = chain2_anova, chain3 = chain3_anova, chain4 = chain4_anova, data = HEI_dec0.4, unit = "1", coef.num = 4)
@@ -890,15 +650,84 @@ get.RR(chain1 = chain1_anova, chain2 = chain2_anova, chain3 = chain3_anova, chai
 coef_mat <- t(rbind(chain1_anova[["samples"]][["beta"]], chain2_anova[["samples"]][["beta"]], 
                     chain3_anova[["samples"]][["beta"]], chain4_anova[["samples"]][["beta"]])) %>% as.matrix()
 
-eff_all <- as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "h_index"]) %*% coef_mat[3,] + 
-  as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + 
-  as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] 
-  
-eff_noh <- as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + 
-  as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] 
-diff_eff <- eff_all-eff_noh
+eff_all <-as.matrix(HEI_dec0.4[, "h_index"]) %*% coef_mat[3,] # as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] + coef_mat[1,]
 
-eff <- t(apply(diff_eff, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
+# eff_noh <- as.matrix(HEI_dec0.4[, "Pop_Den_km2"]) %*% coef_mat[2,] + as.matrix(HEI_dec0.4[, "Prosperity"]) %*% coef_mat[4,] + as.matrix(HEI_dec0.4[, "retail_gr"]) %*% coef_mat[5,] + as.matrix(HEI_dec0.4[, "week"]) %*% coef_mat[6,] 
+
+eff_all_ci <- t(apply(eff_all, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
+#eff_noh_ci <- t(apply(eff_noh, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
+exp(eff_all_ci)
+
+#diff_eff <- eff_all-eff_noh
+#eff <- t(apply(diff_eff, 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))))
+
+unlist(tapply(eff_all_ci[,1], HEI_dec0.4$LTLA_ID, cumsum))
+
+
+
+HEI_risk <- HEI_dec0.4 %>% bind_cols(., eff_all_ci)
+HEI_risk4map <- HEI_risk %>% 
+  mutate(week = isoweek(date)) %>% 
+  group_by(LTLA_name, week) %>% 
+  arrange(LTLA_ID) %>% 
+  bind_cols(., cum = unlist(tapply(eff_all_ci[,1], HEI_dec0.4$LTLA_ID, cumsum))) %>% 
+  mutate(acc_risk = sum(`50%`),
+         cum = max(cum)) %>% 
+  distinct(LTLA_name, week, .keep_all = T) %>% 
+  dplyr::select(LTLA_name, week, acc_risk, cum) %>%   # , `2.5%`, `97.5%`
+  ungroup()
+  
+  
+risk_map <- Eng_shp %>% 
+  full_join(., HEI_risk4map, by = c("LAD19NM"="LTLA_name")) %>% 
+  st_transform(., crs = 4326)
+
+
+### plot risk map
+ggsave(
+  risk_map %>% filter(week %in%  c(35:44)) %>%  
+    ggplot() +
+    geom_sf(aes(fill = acc_risk), size = 0.05) +
+    scale_fill_gradientn(name = "Risk", 
+                         colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF"),
+                         values = c(1,0.8,0.5,0.3,0.2,0.1,0.0001)) + #rev(seq(0,1,by=0.05)), breaks = c(-93, 0, 100, 200, 300, 400), labels = c("-100", "0", "100", "200", "300", "400")
+    coord_sf() +
+    theme_minimal() +
+    facet_wrap(~week, ncol = 5) + 
+    theme(panel.grid = element_blank(),
+          panel.background = element_blank(), 
+          axis.text = element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.title = element_blank(), 
+          legend.title.align = 0.5,
+          legend.title = element_text(face = "bold", size = 14),
+          legend.text = element_text(size = 12),
+          legend.box.just = "center",
+          strip.text = element_text(size = 18)), 
+  filename = "outputs/risk35_44.pdf", width = 12, height = 11)
+
+ggsave(
+  risk_map %>% filter(week %in%  c(35:44)) %>%  
+    ggplot() +
+    geom_sf(aes(fill = cum), size = 0.05) +
+    scale_fill_gradientn(name = "Cumulative risk", 
+                         colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF"),
+                         values = c(1,0.8,0.5,0.3,0.2,0.1,0.0001)) + #rev(seq(0,1,by=0.05)), breaks = c(-93, 0, 100, 200, 300, 400), labels = c("-100", "0", "100", "200", "300", "400")
+    coord_sf() +
+    theme_minimal() +
+    facet_wrap(~week, ncol = 5) + 
+    theme(panel.grid = element_blank(),
+          panel.background = element_blank(), 
+          axis.text = element_blank(), 
+          axis.ticks = element_blank(), 
+          axis.title = element_blank(), 
+          legend.title.align = 0.5,
+          legend.title = element_text(face = "bold", size = 14),
+          legend.text = element_text(size = 12),
+          legend.box.just = "center",
+          strip.text = element_text(size = 18)), 
+  filename = "outputs/cumrisk35_44.pdf", width = 12, height = 11)
+
 
 
 #### Plot the average risk trends
@@ -908,56 +737,82 @@ dat_break <- seq.Date(from = as.Date("2020-06-02"),
 dat_label <- paste0("W", isoweek(dat_break))
 
 
-HEI_dec0.4 %>% 
-  bind_cols(.,eff) %>%
-  filter(LTLA_ID == 296) %>% 
-  ggplot() +
-  geom_line(aes(x=as.Date(date), y=`50%`)) +
-  geom_ribbon(aes(x=as.Date(date), ymin=`2.5%`, ymax=`97.5%`), alpha=0.1) +
-  scale_x_date(name = "Week", breaks = dat_break, labels = dat_label, expand = c(0,0)) +
-  scale_y_continuous(name = "Effect of h-index") + 
-  theme_classic() + 
-  theme(axis.text = element_text(size = 16, colour = "black"),
-        axis.title = element_text(size = 18, colour = "black"),
-        plot.title = element_text(size = 18, colour = "black"))
+fit_mat <- rbind(chain1_anova[["samples"]][["fitted"]], chain2_anova[["samples"]][["fitted"]], 
+                  chain3_anova[["samples"]][["fitted"]], chain4_anova[["samples"]][["fitted"]]) %>% as.matrix()
+fit_mat[5,1:20]
 
 
-#### Spatial pattern in disease risk in the last year - mean and PEP
-risk.samples.2010 <- risk.samples.combined[ ,HEI_dec0.6$date==as.Date("2020-09-17")]
-risk.2010 <- apply(risk.samples.2010, 2, median)
-pep.2010 <- apply(risk.samples.2010 > 1, 2, mean)
+risk.trends <- array(NA, c(4000, length(table(HEI_dec0.4$date))))
+# t_eff_all <- t(eff_all)
+for (i in 1:4000) {
+  risk.trends[i,] <- t(tapply(eff_all[,i], HEI_dec0.4$date, mean))
+}
+
+for (i in 1:4000) {
+  risk.trends[i,] <- tapply(fit_mat[i,], HEI_dec0.4$date, mean)
+}
+
+time.trends <- t(apply(risk.trends, 2, quantile, c(0.5, 0.025, 0.975))) %>% 
+  as.data.frame() %>% 
+  mutate(date=as.Date(names(table(HEI_dec0.4$date))))%>% 
+  setNames(.,c("median","lci", "uci","date")) 
+
+ggsave(
+  ggplot(time.trends) + 
+    geom_line(aes(x = date, y = median), size = 1.2, colour = "#082243", alpha = 0.7) +
+    # geom_vline(xintercept = 11, size = 1.2, linetype = 3, colour = "#bc3b29") +
+    #  geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+    geom_ribbon(aes(x = date, ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
+    scale_x_date(name = "Date", breaks = dat_break, labels = dat_label) +
+    scale_y_continuous(name = "Relationship between reopen") + 
+    theme_bw() +
+    theme(axis.text = element_text(size = 14, colour = "black"),
+          axis.title = element_text(size = 16, colour = "black"),
+          plot.title = element_text(size = 18, colour = "black"),
+          plot.margin = unit(c(0.5,1,0.5,1),"cm"),
+          plot.tag = element_text(size = 18),
+          plot.tag.position = c(0, 1)), filename = "outputs/time.trend.pdf", width = 18, height = 12)
 
 
-#### Map the results
-residuals2010.LA$risk.2010 <- summary(risk.2010)
-residuals2010.LA$pep.2010 <- pep.2010
-residuals2010.LA.ll <- spTransform(residuals2010.LA, CRS("+proj=longlat +datum=WGS84 +no_defs"))
 
-colours <- colorNumeric(palette = "YlOrBr", domain = residuals2010.LA.ll@data$risk.2010, reverse=FALSE)
+eff_all <-as.matrix(HEI_dec0.4[, "h_index"]) %*% coef_mat[3,] 
 
 
-### plot England map ---
-low_col <- colorRampPalette(c("#F6F6F6FF", "#E0B040FF"))
-high_col <- colorRampPalette(c("#E0B040FF", "#C87810FF"))
+# edian(HEI$h_index[HEI$h_index>0], na.rm = T) # 0.03111585
 
-X11(type = "cairo") 
+decay0.4 * 0.03111585
 
-x11.save(
-  ggplot() +
-    geom_sf(data = map_dat, aes(fill = hall_num), size = 0.05) +
-    scale_fill_gradientn(name = "Number of halls", colors=c(low_col(10), high_col(50)), 
-                         breaks = c(1, 20, 40, 60), labels = c("0", "20", "40", "60")) +
-    geom_sf(data = hall_sf, color = "#0f2f78", size = 0.3, alpha = 0.8) +
-    coord_sf() +
-    theme_minimal() +
-    theme(panel.grid = element_blank(),
-          panel.background = element_blank(), 
-          axis.text = element_blank(), 
-          axis.ticks = element_blank(), 
-          axis.title = element_blank(), 
-          legend.position = c(0.15,0.23),
-          legend.title.align = 0.5,
-          legend.title = element_text(face = "bold", size = 12),
-          legend.text = element_text(size = 10),
-          legend.box.just = "center"), 
-  file = "outputs/England.pdf", width = 8, height = 10)
+exp(0.0311158500)
+
+function(x) {1*exp(-0.4*x)}
+
+
+int_coef <- array(NA, c(4000, 14))
+for (i in 1:14) {
+  for (j in 1:4000) {
+    int_coef[j,i] <- integrate(function(x) {0.03111585*exp(-0.4*x)*coef_mat[3,][j]}, lower = 0, upper = i)$value
+  }
+}
+
+t(apply(int_coef, 2, quantile, c(0.5, 0.025, 0.975)))
+fig5 <- data.frame(date = 1:14, t(apply(int_coef, 2, quantile, c(0.5, 0.025, 0.975)))) %>% setNames(., c("date","median", "lci", "uci"))
+fig5[15, ] <- c(0,0,0,0)
+fig5 %>% arrange(date)
+ggplot(fig5, aes(x = date)) +
+ # geom_vline(xintercept = 11, size = 1.2, linetype = 2, colour = "#bc3b29") +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+  geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
+  geom_line(aes(y = median), size = 2, colour = "#082243") +
+ # scale_x_continuous(name = "Date", breaks = seq(1,41, by=2), labels = c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,30,by=2)))) +
+#  scale_y_continuous(name = "Cumulative effect related to HEIs reopen", breaks = -3:5,limits = c(-3,5), expand = c(0,0)) + 
+  labs(tag = "B.") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 14, colour = "black"),
+        axis.title = element_text(size = 16, colour = "black"),
+        plot.title = element_text(size = 18, colour = "black"),
+        plot.margin = unit(c(0.5,1,0.5,1),"cm"),
+        plot.tag = element_text(size = 18),
+        plot.tag.position = c(0, 1))
+
+
+
