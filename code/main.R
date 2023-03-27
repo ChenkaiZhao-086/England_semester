@@ -34,7 +34,7 @@ source("code/data_import.R")
 
 ### calculate hall number in each LTLA ---
 hall_num <- Hall_LTLA_dat %>% 
-  reframe(hall_num = n(),  .by = c(LTLA_ID, LTLA_name)) %>% 
+  reframe(hall_num = n(), .by = c(LTLA_ID, LTLA_name)) %>% 
   arrange(desc(hall_num)) 
 
 
@@ -83,23 +83,34 @@ LTLA_dat_combine <- reduce(list(LTLA_dat, combine1, Tab1_case, Tab1_rt), full_jo
   drop_na() # deleat Cornwall, Isles of Scilly, Hackney, City of London
 
 
+Tab1_case_mean <- LTLA_case_dat %>% 
+  group_by(LTLA_ID, areaCode, LTLA_name) %>% 
+  filter(date > as.Date("2020-06-02") & date <= as.Date("2020-12-05")) %>% 
+  mutate(week = week(date)) %>% 
+  group_by(LTLA_ID, week) %>% 
+  mutate(week_case = sum(newCasesBySpecimenDate)) %>% 
+  ungroup() %>% 
+  reframe(mean = median(week_case), .by = c(LTLA_ID, LTLA_name))
+
+
 LTLA_dat_compare <- LTLA_dat_combine %>% 
+  left_join(., Tab1_case_mean) %>% 
   mutate(any_hall = if_else(hall_num>0, "LTLA with hall(s)", "LTLA without hall"),
          Prosperity = as.numeric(Prosperity)) %>% 
   group_by(any_hall) %>% 
   summarise(n.LTLA = as.character(n()),
             across(c(ends_with("num")), sum, .names = "n.{col}"),
-            across(c(case, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(median(x, na.rm=T), 2)}, .names = "{col}_m"),
-            across(c(case, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(quantile(x, 0.25, na.rm = T), 2)}, .names = "{col}_p25"),
-            across(c(case, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(quantile(x, 0.75, na.rm = T), 2)}, .names = "{col}_p75")) %>% 
-  mutate(Case_ci = paste0(case_m, " (", case_p25, ", ", case_p75, ")"),
+            across(c(mean, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(median(x, na.rm=T), 2)}, .names = "{col}_m"),
+            across(c(mean, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(quantile(x, 0.25, na.rm = T), 2)}, .names = "{col}_p25"),
+            across(c(mean, GDP_pc, Pop_Den_km2, Prosperity), function(x){round(quantile(x, 0.75, na.rm = T), 2)}, .names = "{col}_p75")) %>% 
+  mutate(Case_ci = paste0(mean_m, " (", mean_p25, ", ", mean_p75, ")"),
          GDP_ci = paste0(GDP_pc_m, " (", GDP_pc_p25, ", ", GDP_pc_p75, ")"),
          PD_ci = paste0(Pop_Den_km2_m, " (", Pop_Den_km2_p25, ", ", Pop_Den_km2_p75, ")"),
          prop_ci = paste0(Prosperity_m, " (", Prosperity_p25, ", ", Prosperity_p75, ")")) %>% 
   dplyr::select(any_hall, n.LTLA, contains(c("ci"))) %>% 
-  set_names("", "","Cumulative Number of cases from start to end", "GDP", "Population density", "Prosperity score") %>% 
+  set_names("", "","Median Number of confirmed cases per week per LTLA", "GDP", "Population density", "Prosperity score") %>% 
   t()
-#write.csv(LTLA_dat_compare, "outputs/table/Table1.csv")
+write.csv(LTLA_dat_compare, "outputs/table/Table1.csv")
 
 
 # 2.  loction distribution ------------------------------------------------
