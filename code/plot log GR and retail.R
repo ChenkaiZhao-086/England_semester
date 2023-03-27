@@ -28,7 +28,7 @@ gr_map <- Eng_shp %>%
   full_join(., gr_map, by = c("LAD19NM"="LTLA_name")) %>% 
   st_transform(., crs = 4326)
 
-x11(type="cairo")
+#x11(type="cairo")
 
 ggsave(
   gr_map %>% filter(week %in%  c(35:44)) %>%  # 
@@ -51,50 +51,50 @@ ggsave(
           legend.text = element_text(size = 12),
           legend.box.just = "center",
           strip.text = element_text(size = 18)), 
-  filename = "outputs/log_gr35_44.pdf", width = 12, height = 11)
+  filename = "outputs/log_gr35_44.pdf", width = 14, height = 12)
 
 
-ggsave(
-  gr_map %>% filter(week %in%  c(35:44)) %>%  # 
-    ggplot() +
-    geom_sf(aes(fill = retail_w), size = 0.02) +
-    scale_fill_gradientn(name = "Retail and recreation\npercent change", 
-                         colours = c("#662506FF","#CC4C02FF","#FB9A29FF","#FAEFD1FF", "#115b80","#082243"), 
-                         values = c(1,0.9,0.8, 0.7,0.58,0.38,0.28,0.11,0)) +#  , breaks = seq(-2,3, by=1),labels = c("-2", "-1", "0", "1", "2", "3")
-    coord_sf() +
-    theme_minimal() +
-    facet_wrap(~week, ncol = 5) + 
-    theme(panel.grid = element_blank(),
-          panel.background = element_blank(), 
-          axis.text = element_blank(), 
-          axis.ticks = element_blank(), 
-          axis.title = element_blank(), 
-          legend.title.align = 0.5,
-          legend.title = element_text(face = "bold", size = 14),
-          legend.text = element_text(size = 12),
-          legend.box.just = "center",
-          strip.text = element_text(size = 18)), 
-  filename = "outputs/retail35_44.pdf", width = 12, height = 11)
-
-
-ggsave(
-  gr_map %>% filter(week %in%  c(35:44)) %>%  # 
-    ggplot() +
-    geom_sf(aes(fill = retail_gr), size = 0.02) +
-    scale_fill_gradientn(name = "Retail and recreation\npercent change", 
-                         colours = c("#662506FF","#CC4C02FF","#FB9A29FF","#FAEFD1FF", "#115b80","#082243"), 
-                         values = c(1,0.95,0.88,0.79,0.71, 0.55,0.28,0)) +#  , breaks = seq(-2,3, by=1),labels = c("-2", "-1", "0", "1", "2", "3")
-    coord_sf() +
-    theme_minimal() +
-    facet_wrap(~week, ncol = 5) + 
-    theme(panel.grid = element_blank(),
-          panel.background = element_blank(), 
-          axis.text = element_blank(), 
-          axis.ticks = element_blank(), 
-          axis.title = element_blank(), 
-          legend.title.align = 0.5,
-          legend.title = element_text(face = "bold", size = 14),
-          legend.text = element_text(size = 12),
-          legend.box.just = "center",
-          strip.text = element_text(size = 18)), 
-  filename = "outputs/retailgr35_44.pdf", width = 12, height = 11)
+# ggsave(
+#   gr_map %>% filter(week %in%  c(35:44)) %>%  # 
+#     ggplot() +
+#     geom_sf(aes(fill = retail_w), size = 0.02) +
+#     scale_fill_gradientn(name = "Retail and recreation\npercent change", 
+#                          colours = c("#662506FF","#CC4C02FF","#FB9A29FF","#FAEFD1FF", "#115b80","#082243"), 
+#                          values = c(1,0.9,0.8, 0.7,0.58,0.38,0.28,0.11,0)) +#  , breaks = seq(-2,3, by=1),labels = c("-2", "-1", "0", "1", "2", "3")
+#     coord_sf() +
+#     theme_minimal() +
+#     facet_wrap(~week, ncol = 5) + 
+#     theme(panel.grid = element_blank(),
+#           panel.background = element_blank(), 
+#           axis.text = element_blank(), 
+#           axis.ticks = element_blank(), 
+#           axis.title = element_blank(), 
+#           legend.title.align = 0.5,
+#           legend.title = element_text(face = "bold", size = 14),
+#           legend.text = element_text(size = 12),
+#           legend.box.just = "center",
+#           strip.text = element_text(size = 18)), 
+#   filename = "outputs/retail35_44.pdf", width = 14, height = 12)
+# 
+# 
+# ggsave(
+#   gr_map %>% filter(week %in%  c(35:44)) %>%  # 
+#     ggplot() +
+#     geom_sf(aes(fill = retail_gr), size = 0.02) +
+#     scale_fill_gradientn(name = "Retail and recreation\npercent change", 
+#                          colours = c("#662506FF","#CC4C02FF","#FB9A29FF","#FAEFD1FF", "#115b80","#082243"), 
+#                          values = c(1,0.95,0.88,0.79,0.71, 0.55,0.28,0)) +#  , breaks = seq(-2,3, by=1),labels = c("-2", "-1", "0", "1", "2", "3")
+#     coord_sf() +
+#     theme_minimal() +
+#     facet_wrap(~week, ncol = 5) + 
+#     theme(panel.grid = element_blank(),
+#           panel.background = element_blank(), 
+#           axis.text = element_blank(), 
+#           axis.ticks = element_blank(), 
+#           axis.title = element_blank(), 
+#           legend.title.align = 0.5,
+#           legend.title = element_text(face = "bold", size = 14),
+#           legend.text = element_text(size = 12),
+#           legend.box.just = "center",
+#           strip.text = element_text(size = 18)), 
+#   filename = "outputs/retailgr35_44.pdf", width = 14, height = 12)

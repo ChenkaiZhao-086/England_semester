@@ -37,7 +37,7 @@ saveGIF({
     g1 <- risk_map_day %>% filter(date == i) %>%  
       ggplot() +
       geom_sf(aes(fill = acc_risk), size = 0.05) +
-      scale_fill_gradientn(name = "Risk", 
+      scale_fill_gradientn(name = "Effect of HEI(s) reopen", 
                            colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF", "grey80"),
                            values = c(1,0.8,0.6,0.4,0.2,0.1,0.0001,0), 
                            limits = c(1,1.2), 
@@ -61,7 +61,7 @@ saveGIF({
     g1s <- map_crop %>% filter(date == i) %>% 
       ggplot() +
       geom_sf(aes(fill = acc_risk), size = 0.05) +
-      scale_fill_gradientn(name = "Risk", 
+      scale_fill_gradientn(name = "Effect of HEI(s) reopen", 
                            colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF", "grey80"),
                            values = c(1,0.8,0.6,0.4,0.2,0.1,0.0001,0), 
                            limits = c(1,1.2), 
@@ -88,7 +88,7 @@ saveGIF({
     g2 <- risk_map_day %>% filter(date == i) %>%  
       ggplot() +
       geom_sf(aes(fill = cum), size = 0.05) +
-      scale_fill_gradientn(name = "Risk", 
+      scale_fill_gradientn(name = "Cumulative effect of\nHEI(s) reopen", 
                            colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF", "grey80"),
                            values = c(1,0.8,0.6,0.4,0.2,0.1,0.0001,0), 
                            limits = c(1,2), 
@@ -112,7 +112,7 @@ saveGIF({
     g2s <- map_crop %>% filter(date == i) %>% 
       ggplot() +
       geom_sf(aes(fill = cum), size = 0.05) +
-      scale_fill_gradientn(name = "Risk", 
+      scale_fill_gradientn(name = "Cumulative effect of HEI(s) reopen", 
                            colours = c("#662506FF","#993404FF", "#CC4C02FF", "#EC7014FF", "#FB9A29FF","#FEC44FFF","#FAEFD1FF","#FFF7BCFF", "#FFFFE5FF", "grey80"),
                            values = c(1,0.8,0.6,0.4,0.2,0.1,0.0001,0), 
                            limits = c(1,2), 

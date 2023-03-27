@@ -16,7 +16,7 @@
     group_by(areaName, date) %>% 
     distinct(areaName, date, .keep_all = T) %>% 
     rename(areaCode = areaCode.x, CLTLA_name = areaName, newCasesBySpecimenDate = newCasesBySpecimenDate.x)
-  write_csv(Eng_case, "Eng_case.csv")
+  #write_csv(Eng_case, "data/Eng_case.csv")
 } # expand data
 
 {
@@ -34,7 +34,7 @@
    full_join(., LTLA_code) %>% 
   dplyr::select(areaCode, LTLA_ID, areaName, date, age, cases, rollingSum, rollingRate)
   
-  write_csv(Eng_age_dat, "Eng_age_dat.csv")
+ # write_csv(Eng_age_dat, "Eng_age_dat.csv")
 } # prepare age structure data
 
 
@@ -54,12 +54,12 @@ R.data <- R.data %>%
   dplyr::select(date, Imperial, contains("ci"))
 R.data1 <- R.data
 {
-  rt_dat <- read_excel("rt_data.xlsx") %>% 
+  rt_dat <- read_excel("data/raw/rt_data.xlsx") %>% 
     dplyr::select(LTLA_name= area, Date, lci = Rt_2_5, rt = Rt_50, uci = Rt_97_5) %>% 
     filter(LTLA_name != c("Hackney", "City of London", "Cornwall", "Isles of Scilly"),
            Date >= "2020-07-13" & Date <= "2020-12-06") # Rt data 的分类与LTLA的分类方式不同，Table1暂时不做Rt
 } # the other type of Rt dataset
-write_csv(R.data, "dat1.csv")
+#write_csv(R.data, "dat1.csv")
 
 ### sample Rt data
 #N.sample <- 1000
