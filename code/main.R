@@ -7,7 +7,6 @@ library(jsonlite)
 library(readxl)
 library(lubridate)
 library(sf)
-library(httpgd)
 ##library(CausalImpact)
 library(zoo)
 library(assertthat)
@@ -20,7 +19,10 @@ library(coda) # for MCMC analysis and diagnose
 library(foreach) # parallel computation
 library(doParallel) # parallel computation
 
-
+library(httpgd)
+hgd() 
+hgd_view() 
+# hgd_browse() 
 
 source("code/function.R")
 source("code/super_ci.R")
@@ -95,7 +97,7 @@ Tab1_case_mean <- LTLA_case_dat %>%
 
 LTLA_dat_compare <- LTLA_dat_combine %>% 
   left_join(., Tab1_case_mean) %>% 
-  mutate(any_hall = if_else(hall_num>0, "LTLA with hall(s)", "LTLA without hall"),
+  mutate(any_hall = if_else(hall_num>0, "LTLA with hall(s)", "LTLA without hall"), # nolint: line_length_linter.
          Prosperity = as.numeric(Prosperity)) %>% 
   group_by(any_hall) %>% 
   summarise(n.LTLA = as.character(n()),
@@ -114,14 +116,6 @@ write.csv(LTLA_dat_compare, "outputs/table/Table1.csv")
 
 
 # 2.  loction distribution ------------------------------------------------
-
-## 解决Mac画地图的一个兼容性方法：使用 X11(type = "cairo") 搭配进行绘图结果的查看. 导出时使用quartz配合 dev.off() 使用以上的方法，grom_polygon或geom_sf速读均很快
-
-#X11(type = "cairo") # mac画图巨快！！！！
-#library(httpgd)
-#hgd() # 这个可以用在apple silicon上，之前的x11方案似乎在M2上会失效，另外图形设备切换成AGG似乎比cairo还快，不贵应该没有这个快
-#hgd_view() #右下角的图形设备
-# hgd_browse() #浏览器中的图形设备
 
 Eng_shp <- st_read(dsn = "LAT_shp/Local_Authority_Districts__December_2019__Boundaries_UK_BFE.shp")
 # crs_use <- st_crs(Eng_shp) # 得到shp文件中的crs (coordinate reference system)，是参考坐标系，如果设置错误，则地图的投影会错误. 一般crs设置为4326，即WGS84不会出错, 属于全球通用, 也可以设置为专有的
@@ -383,6 +377,8 @@ source("code/bsts_3.R")
 ### make table2——Causal impact part
 # source("code/cal.cum.ci.R") # This is another type of cal.cum.cl()
 table2_ci <- cal.cum.ci(data = ci_m_base_gr, m.data = mat_base, table = ci_m_base_gr_table, tidy.out = T)
+table2_ci_sens <- cal.cum.ci(data = ci_base_3, m.data = mat_base3, table = base_table_3, tidy.out = T)
+#write.csv(table2_ci_sens, "outputs/table/Table2_sens.csv")
 
 
 # 5. Bayesian spatio-temporal ---------------------------------------------
@@ -484,14 +480,17 @@ HEI_dec0.4 <- do.call(rbind, by(HEI_all, HEI_all$LTLA_ID, get.index, decay0.4)) 
          gmc_retail2 = gmc_retail+100,
          lag_retail = lag(gmc_retail2, n=1),
          retail_gr = gmc_retail2/lag_retail,
-         week = if_else((wday(date) == 1 |wday(date) == 7), 1,0)) %>%
+         week = row_number(),
+         weekend = if_else((wday(date) == 1 |wday(date) == 7), 1,0)) %>%
   filter(LTLA_ID != 43 & LTLA_ID != 333 & LTLA_ID != 340 & LTLA_ID != 342 & LTLA_ID != 360 , 
          date >= "2020-06-02" & date <= "2020-12-05") %>% 
   arrange(date, LTLA_ID) %>% 
   ungroup() %>% 
   left_join(., hall_num) %>% 
+  # group_by(LTLA_ID, date) %>%
+  # mutate(week_trend = row_number()) %>% 
   dplyr::select(LTLA_ID, LTLA_name, date, Pop_Den_km2, Prosperity, areaCode, growth_rate, log_GR, log_GR2, h_index, h_ma,
-                h_gr, h_gr_ma, retail_gr_ma, retail_gr, week, case, gmc_retail2) # case, gmc_retail2 用来画log_GR和retail_gr的变化
+                h_gr, h_gr_ma, retail_gr_ma, retail_gr, week, case, gmc_retail2, weekend) # case, gmc_retail2 用来画log_GR和retail_gr的变化
 
 
 
@@ -519,10 +518,10 @@ W_mat <- nb2mat(W_adj, style = "B", zero.policy = T) # This step generate a 382*
 # default prior: normal prior N(0,100000) 
 ### ST.CARanova Spatio-temporal main effects and an interaction
 set.seed(458)
-chain1_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
-chain2_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
-chain3_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
-chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr +week, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+chain1_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr + week + weekend, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+chain2_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr + week + weekend, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+chain3_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr + week + weekend, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
+chain4_anova <- ST.CARanova(formula = log_GR ~ Pop_Den_km2 + h_index +  Prosperity + retail_gr + week + weekend, family = "gaussian", data = HEI_dec0.4, W = W_mat, burnin = 10000, n.sample = 110000, thin = 100, interaction = T)
 
 ### n.effect means effective number of independent samples; Geweke.diag is another MCMC convergence diagnostic that should lie between -2 and 2 to indicate convergence.
 

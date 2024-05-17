@@ -555,15 +555,15 @@ plot.it <- function(data, length.dat, report_table, select.length = 41, title, s
   plot_table_original <- cbind(meta_table,before_open)
   
   f1 <- ggplot(plot_table_original, aes(x = date)) + 
-    geom_vline(xintercept = 11, linewidth = 1.2, linetype = 3, colour = "#bc3b29") +
+    geom_vline(xintercept = 11, linewidth = 1.2, linetype = 2, colour = "#bc3b29") +
     geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
     geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
     geom_line(aes(y = before_open), linewidth = 1.5, colour = "#ad002a", alpha = 0.7) +
     geom_line(aes(y = median), linewidth = 1.2, linetype = 2, colour = "#082243", alpha = 0.7) +
     scale_x_continuous(name = "", breaks = seq(1,select.length, by=2), 
-                       labels = c(paste0("-",seq(1,10,by=2)), "Reopen", paste0("+",seq(2,select.length-11,by=2)))) + # c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,select.length-11,by=2)))
+                       labels = c(paste0("-",rev(seq(2,10,by=2))), "Reopen", paste0("+",seq(2,select.length-11,by=2)))) + # c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,select.length-11,by=2)))
     scale_y_continuous(name = "Pooled log growth rates between\ncase LTLA and control LTLA(s)", limits = c(-1,1)) + #
-    labs(tag = "A.") +
+    labs(tag = "(1). ") +
     theme_bw() +
     theme(axis.text = element_text(size = 14, colour = "black"),
           axis.title = element_text(size = 16, face = "bold", colour = "black"),
@@ -612,9 +612,9 @@ plot.it <- function(data, length.dat, report_table, select.length = 41, title, s
     geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.1, colour = "#275066", fill = "#275066") +
     geom_line(aes(y = median), linewidth = 2, colour = "#082243") +
     scale_x_continuous(name = "Date", breaks = seq(1,select.length, by=2), 
-                       labels = c(paste0("-",seq(1,10,by=2)), "Reopen", paste0("+",seq(2,select.length-11,by=2)))) + # c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,select.length-11,by=2)))
+                       labels = c(paste0("-",rev(seq(2,10,by=2))), "Reopen", paste0("+",seq(2,select.length-11,by=2)))) + # c(paste0("B",seq(1,10,by=2)), "Reopen", paste0("A",seq(2,select.length-11,by=2)))
     scale_y_continuous(name = "Cumulative difference in log growth rate\nbetween case LTLA and control LTLA(s)", breaks = -3:5,limits = c(-3,5), expand = c(0,0)) + 
-    labs(tag = "B.") +
+    labs(tag = "(2). ") +
     theme_bw() +
     theme(axis.text = element_text(size = 14, colour = "black"),
           axis.title = element_text(size = 16, face = "bold", colour = "black"),
@@ -782,7 +782,7 @@ get.RR <- function(chain1 = NA,
   
   if (unit == "1") {
     for (i in 2:(coef.num+1)) {
-      res_matrix[i-1,] <- round(quantile(exp(1 * beta.samples.combined[ ,i]), ci),digits)
+      res_matrix[i-1,] <- round(quantile(exp(10 * beta.samples.combined[ ,i]), ci),digits)
     }
   } else {
     for (i in 2:(coef.num+1)) {
