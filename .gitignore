@@ -1,0 +1,21 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+data
+England map
+Figure
+LAT_shp
+Outputs/Archive fig
+Outputs/table
+Code/Archive code
+*.ai
+*.pdf
+*.docx
+*.RData
+*.drawio
+*.png
+Code/Archive*/
+outputs/
+.lintr
