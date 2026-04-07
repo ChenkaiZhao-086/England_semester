@@ -242,3 +242,5 @@ source("code/1.1.Fig2c.R")
 
 ### plot region distribution
 source("code/1.2.plot_region.R")
+
+source("code/1.3.U_test_for_table1.R")
