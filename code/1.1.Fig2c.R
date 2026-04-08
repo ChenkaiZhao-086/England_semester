@@ -157,7 +157,7 @@ Fig1c_v2 <-
     alpha = 0.5
   ) +
   geom_line(
-    aes(y = gmc_retail2, color = "Mobility change"),
+    aes(y = gmc_retail2, color = "Population mobility"),
     linewidth = 0.7,
     alpha = 0.6
   ) +
@@ -186,7 +186,7 @@ Fig1c_v2 <-
   scale_color_manual(
     values = c(
       "Log growth rate" = "#003773",
-      "Mobility change" = "#E30118"
+      "Population mobility" = "#E30118"
     )
   ) +
   scale_fill_manual(
