@@ -232,6 +232,8 @@ source("code/3.2.bayesST.R")
 ### KNN analysis
 source("code/3.3.KNN_analysis.R")
 
+### Power analysis
+source("code/3.4.Power_Analysis.R")
 
 # 4. Generate Table 2 ------------------------------------------------------
 ### Table2 in main analysis -----------------------------------------------

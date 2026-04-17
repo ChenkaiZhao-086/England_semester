@@ -202,8 +202,95 @@ FigS_CAR_dat <- bind_rows(
     group = factor(group, levels = c("main", "KNN"))
   )
 
+FigS_CAR_main <- FigS_CAR_dat %>%
+  filter(N_region == "All region") %>%
+  ggplot(aes(x = date)) +
+  geom_vline(
+    xintercept = 0,
+    linewidth = 0.4,
+    linetype = 2,
+    colour = "grey70"
+  ) +
+  geom_hline(yintercept = 1, colour = "grey70") +
+  geom_ribbon(
+    aes(
+      ymin = exp(cum.effect.lower),
+      ymax = exp(cum.effect.upper),
+      colour = group,
+      fill = group
+    ),
+    alpha = 0.03,
+    show.legend = FALSE
+  ) +
+  geom_line(
+    aes(y = exp(cum.effect), colour = group),
+    linewidth = 0.5,
+    alpha = 0.8
+  ) +
+  scale_x_continuous(
+    name = NULL,
+    breaks = seq(0, 30, by = 5),
+    labels = seq(0, 30, by = 5),
+    limits = c(0, 30),
+    expand = expansion(add = c(1, 0))
+  ) +
+  scale_y_log10(
+    name = NULL,
+    breaks = c(1, 2, 3),
+    limits = c(0.83, 2.5)
+  ) +
+  scale_colour_manual(
+    name = NULL,
+    values = c(
+      "main" = "#003773",
+      "KNN" = "#E30118"
+    ),
+    labels = c(
+      "main" = "Main Analysis",
+      "KNN" = "KNN Analysis"
+    )
+  ) +
+  scale_fill_manual(
+    name = NULL,
+    values = c(
+      "main" = "#003773",
+      "KNN" = "#E30118"
+    ),
+    labels = c(
+      "main" = "Main Analysis",
+      "KNN" = "KNN Analysis"
+    )
+  ) +
+  guides(
+    colour = "none",
+    fill = "none",
+  ) +
+  facet_wrap(~N_region) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 8, colour = "black"),
+    axis.title = element_text(size = 10, face = "bold", colour = "black"),
+    strip.text = element_text(size = 8, face = "bold", colour = "black"),
+    strip.background = element_rect(fill = "grey95", colour = "grey70"),
+    legend.title = element_text(size = 8, face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.position = "bottom",
+    legend.key.width = unit(1.2, "cm"),
+    panel.spacing = unit(0.8, "lines"),
+    plot.title = element_text(size = 8, face = "bold", colour = "black"),
+    plot.margin = unit(c(0.5, 1, 0.5, 1), "cm")
+  )
+ggsave(
+  FigS_CAR_main,
+  filename = "outputs/FigS_CAR_main.pdf",
+  width = 5.9,
+  height = 6
+)
 
-FigS_CAR <- ggplot(FigS_CAR_dat, aes(x = date)) +
+
+FigS_CAR <- FigS_CAR_dat %>%
+  filter(N_region != "All region") %>%
+  ggplot(aes(x = date)) +
   geom_vline(
     xintercept = 0,
     linewidth = 0.4,
@@ -295,10 +382,16 @@ FigS_bsts_dat <- bind_rows(
 )
 FigS_bsts_dat <- FigS_bsts_dat %>%
   filter(date >= 11) %>%
-  mutate(date = date - 11, N_region = factor(N_region, levels = RowOrder))
+  mutate(
+    date = date - 11,
+    N_region = factor(N_region, levels = RowOrder),
+    group = factor(group, levels = c("MultiMatch", "over2", "noM25", "main"))
+  )
 
 
-FigS_bsts <- ggplot(FigS_bsts_dat, aes(x = date)) +
+FigS_bsts_main <- FigS_bsts_dat %>%
+  filter(N_region == "All region") %>%
+  ggplot(aes(x = date)) +
   geom_vline(
     xintercept = 0,
     linewidth = 0.4,
@@ -313,13 +406,105 @@ FigS_bsts <- ggplot(FigS_bsts_dat, aes(x = date)) +
       colour = group,
       fill = group
     ),
-    alpha = 0.03,
+    alpha = 0.01,
     show.legend = FALSE
   ) +
   geom_line(
     aes(y = exp(cum.effect), colour = group),
     linewidth = 0.5,
-    alpha = 0.8
+    alpha = 0.5
+  ) +
+  facet_wrap(~N_region) +
+  scale_x_continuous(
+    name = NULL,
+    breaks = seq(0, 30, by = 5),
+    labels = seq(0, 30, by = 5),
+    limits = c(0, 30),
+    expand = expansion(add = c(1, 0))
+  ) +
+  scale_y_log10(
+    name = NULL
+  ) +
+  scale_colour_manual(
+    name = NULL,
+    values = c(
+      "main" = "#003773",
+      "noM25" = "#E30118",
+      "over2" = "#00D7B6",
+      "MultiMatch" = "#FED502"
+    ),
+    labels = c(
+      "main" = "Main Analysis",
+      "noM25" = "Excluding London",
+      "over2" = "Matched LTLAs with \u2265 2 Halls",
+      "MultiMatch" = "LTLAs with \u2265 2 Matched Controls"
+    )
+  ) +
+  scale_fill_manual(
+    name = NULL,
+    values = c(
+      "main" = "#003773",
+      "noM25" = "#E30118",
+      "over2" = "#00D7B6",
+      "MultiMatch" = "#FED502"
+    ),
+    labels = c(
+      "main" = "Main Analysis",
+      "noM25" = "Excluding London",
+      "over2" = "Matched LTLAs with \u2265 2 Halls",
+      "MultiMatch" = "LTLAs with \u2265 2 Matched Controls"
+    )
+  ) +
+  guides(
+    colour = "none",
+    fill = "none"
+  ) +
+  facet_wrap(~N_region) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 8, colour = "black"),
+    axis.title = element_text(size = 10, face = "bold", colour = "black"),
+    strip.text = element_text(size = 8, face = "bold", colour = "black"),
+    strip.background = element_rect(fill = "grey95", colour = "grey70"),
+    legend.title = element_text(size = 8, face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.position = "bottom",
+    legend.key.width = unit(1.2, "cm"),
+    panel.spacing = unit(0.8, "lines"),
+    plot.title = element_text(size = 8, face = "bold", colour = "black"),
+    plot.margin = unit(c(0.5, 1, 0.5, 1), "cm")
+  )
+ggsave(
+  FigS_bsts_main,
+  filename = "outputs/FigS_bsts_main.pdf",
+  width = 5.9,
+  height = 6
+)
+
+FigS_bsts <- FigS_bsts_dat %>%
+  filter(N_region != "All region") %>%
+  ggplot(aes(x = date)) +
+  geom_vline(
+    xintercept = 0,
+    linewidth = 0.4,
+    linetype = 2,
+    colour = "grey70"
+  ) +
+  geom_hline(yintercept = 1, colour = "grey70") +
+  geom_ribbon(
+    aes(
+      ymin = exp(cum.effect.lower),
+      ymax = exp(cum.effect.upper),
+      colour = group,
+      fill = group
+    ),
+    alpha = 0.01,
+    show.legend = FALSE
+  ) +
+  geom_line(
+    aes(y = exp(cum.effect), colour = group),
+    linewidth = 0.5,
+    alpha = 0.5
   ) +
   facet_wrap(~N_region) +
   scale_x_continuous(
@@ -335,10 +520,10 @@ FigS_bsts <- ggplot(FigS_bsts_dat, aes(x = date)) +
   scale_colour_manual(
     name = NULL,
     values = c(
-      "main" = "#FED502",
+      "main" = "#003773",
       "noM25" = "#E30118",
-      "over2" = "#003773",
-      "MultiMatch" = "#00D7B6"
+      "over2" = "#00D7B6",
+      "MultiMatch" = "#FED502"
     ),
     labels = c(
       "main" = "Main Analysis",
@@ -350,10 +535,10 @@ FigS_bsts <- ggplot(FigS_bsts_dat, aes(x = date)) +
   scale_fill_manual(
     name = NULL,
     values = c(
-      "main" = "#FED502",
+      "main" = "#003773",
       "noM25" = "#E30118",
-      "over2" = "#003773",
-      "MultiMatch" = "#00D7B6"
+      "over2" = "#00D7B6",
+      "MultiMatch" = "#FED502"
     ),
     labels = c(
       "main" = "Main Analysis",
@@ -363,7 +548,7 @@ FigS_bsts <- ggplot(FigS_bsts_dat, aes(x = date)) +
     )
   ) +
   guides(
-    colour = guide_legend(override.aes = list(alpha = 1)),
+    colour = guide_legend(reverse = TRUE, override.aes = list(alpha = 1)),
     fill = "none"
   ) +
   facet_wrap(~N_region) +
