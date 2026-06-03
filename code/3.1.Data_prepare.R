@@ -111,7 +111,7 @@ HEI_all <- HEI %>%
 
 
 decay0.4 <- gen.decay(
-  decay.period = 30,
+  decay.period = 30, # 21,# 14, #7, #
   decay.fun = "1*exp(-0.4*x)",
   incubation = 6
 ) # supposed decay fun type: y(t) = yf+(y0-yf)e^(-at) 0.6 OR 0.8

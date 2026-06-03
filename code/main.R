@@ -164,6 +164,7 @@ source("code/3.1.Data_prepare.R")
 ### 3.5 Construct bayesian spatio-temporal model
 # default prior: normal prior N(0,100000)
 ### ST.CARanova Spatio-temporal main effects and an interaction
+set.seed(889)
 results_list <- ST.CARanova(
   formula = log_GR ~ h_index +
     retail_gr +
