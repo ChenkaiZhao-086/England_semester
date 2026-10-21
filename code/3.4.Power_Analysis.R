@@ -1,139 +1,361 @@
-real_result_beta <- do.call(rbind, results_list[["samples"]][["beta"]])
-real_result_tau2 <- do.call(rbind, results_list[["samples"]][["tau2"]])
-real_result_nu2 <- do.call(rbind, results_list[["samples"]][["nu2"]])
-real_result_rho <- do.call(rbind, results_list[["samples"]][["rho"]])
-real_result_delta <- do.call(rbind, results_list[["samples"]][["delta"]])
-
-
-# ==========================================
-# 1. 准备参数
-# ==========================================
-params_from_real <- list(
-  intercept = mean(real_result_beta[, 1]),
-  # h_index_real = mean(real_result_beta[, 2]), # 这个不用，我们要替换成 1.83
-  retail_gr = mean(real_result_beta[, 3]),
-  Pop_Den_km2 = mean(real_result_beta[, 4]),
-  Prosperity = mean(real_result_beta[, 5]),
-  week = mean(real_result_beta[, 6]),
-  weekend = mean(real_result_beta[, 7]),
-  tau2 = mean(real_result_tau2), # 空间方差
-  sigma2 = mean(real_result_nu2), # 误差方差
-  rho = mean(real_result_rho),
-  var_delta = var(colMeans(real_result_delta))
+# Run complete expressions from top to bottom in a fresh R session at project root.
+# This script also remains available through england.stages = "power" in main.R.
+# 1. Load the saved current panel and main CAR; never refit them implicitly.
+Sys.setenv(
+  OMP_NUM_THREADS = "1",
+  OPENBLAS_NUM_THREADS = "1",
+  VECLIB_MAXIMUM_THREADS = "1",
+  MKL_NUM_THREADS = "1"
 )
+library(CARBayesST)
+library(coda)
+library(future)
+library(future.apply)
+source("code/function.R", local = TRUE)
 
-# 基础数据结构
-base_data <- HEI_dec0.4
-n_areas <- nrow(W_mat)
-n_times <- length(unique(base_data$date))
-# 预计算空间矩阵部分 (放在循环外以节省时间)
-# 使用 Leroux 结构的精度矩阵公式: Q = rho * (D - W_mat) + (1 - rho) * I
-D_mat <- diag(rowSums(W_mat))
-I_mat <- diag(1, n_areas)
-# 注意：为了生成数据，我们需要协方差矩阵 Sigma = tau2 * Q^-1
-# 在循环内根据 rho 计算 Q 会更严谨，但如果固定 rho，可以在这里算好 Q_inv
-Q_leroux <- params_from_real$rho *
-  (D_mat - W_mat) +
-  (1 - params_from_real$rho) * I_mat
-Sigma_sp <- params_from_real$tau2 * solve(Q_leroux)
+analysis_workers <- min(as.integer(getOption("england.workers", 2L)), 2L)
+stopifnot(
+  length(analysis_workers) == 1L,
+  !is.na(analysis_workers),
+  analysis_workers >= 1L
+)
+worker_rscript <- getOption(
+  "england.worker_rscript",
+  normalizePath("outputs/bsts-rolling-2026-10-16/runtime/R-worker")
+)
+hall_reference <- 40485
+input_dir <- "outputs/power-2026-10-16/results"
+prepared_file <- file.path(input_dir, "prepared-per-metric.rds")
+main_file <- file.path(input_dir, "car-main.rds")
+result_dir <- "outputs/power-2026-10-17/results"
+table_dir <- "outputs/power-2026-10-17/table"
+for (d in c(result_dir, table_dir)) {
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+}
+prepared <- read.analysis(prepared_file)
+model <- read.analysis(main_file)$model
+base_data <- prepared$datasets$raw
+W <- prepared$panel_weights$raw
+formula <- reformulate(
+  c("h_index", "retail_gr", "Pop_Den_km2", "Prosperity", "week", "day_type"),
+  response = "log_GR",
+  env = baseenv()
+)
+X <- model.matrix(formula, base_data)
+stopifnot(
+  identical(dim(X), dim(model$X)),
+  nrow(X) == 376L * 188L,
+  identical(base_data$LTLA_name, rep(rownames(W), 188L))
+)
+# Coefficients are selected by design-matrix name, including both weekday terms.
+beta <- vapply(
+  colnames(X),
+  function(term) mean(car.effect(model, term)$beta),
+  numeric(1)
+)
+tau2 <- colMeans(do.call(rbind, model$samples$tau2))
+rho <- colMeans(do.call(rbind, model$samples$rho))
+nu2 <- mean(do.call(rbind, model$samples$nu2))
+Q_sp <- rho["rho.S"] *
+  (diag(rowSums(W)) - W) +
+  (1 - rho["rho.S"]) * diag(nrow(W))
+W_time <- 1 * (abs(outer(seq_len(188L), seq_len(188L), "-")) == 1)
+Q_time <- rho["rho.T"] *
+  (diag(rowSums(W_time)) - W_time) +
+  (1 - rho["rho.T"]) * diag(188L)
+# 2. Restore the old simulation budget; retain the current generating model.
+settings <- list(
+  burnin = 1000L,
+  n.sample = 5000L,
+  thin = 1L,
+  n.chains = 1L,
+  n.cores = 1L
+)
+power_inputs <- list(
+  data = as.data.frame(base_data[, all.vars(formula)]),
+  X = X,
+  formula = formula,
+  W = W,
+  beta = beta,
+  nu2 = nu2,
+  # Cholesky factors are reused across replicates instead of repeated eigendecompositions.
+  chol_sp = chol(unname(tau2["tau2.S"]) * solve(Q_sp)),
+  chol_time = chol(unname(tau2["tau2.T"]) * solve(Q_time)),
+  increment = 5000 / hall_reference,
+  settings = settings,
+  # Parsed code ignores whitespace/comments but still rejects changes to analysis logic.
+  signature = c(
+    tools::md5sum(c(prepared_file, main_file)),
+    code = digest::digest(parse(
+      "code/3.4.Power_Analysis.R",
+      keep.source = FALSE
+    ))
+  )
+)
+write.csv(
+  data.frame(
+    parameter = c(names(beta), names(tau2), names(rho), "nu2"),
+    value = c(beta, tau2, rho, nu2)
+  ),
+  file.path(table_dir, "Generating_parameters.csv"),
+  row.names = FALSE
+)
+write.analysis(
+  list(inputs = power_inputs),
+  file.path(result_dir, "power-inputs.rds"),
+  c(prepared_file, main_file)
+)
+# Retain base_data, X and parameters for inspection during interactive execution.
+rm(model, prepared)
+gc()
 
-
-# ==========================================
-# 2. 功效分析function
-# ==========================================
-run_single_sim <- function(sim_id, effect = 1.083) {
-  effect_size <- log(effect) / (5000 / 40382)
-
-  ## Generate simulation data
-
-  # 1. 生成空间随机效应 phi (考虑 rho)
-  phi_sim <- mvrnorm(1, mu = rep(0, n_areas), Sigma = Sigma_sp)
-
-  # 2. 生成时间随机效应 delta
-  delta_sim <- rnorm(n_times, 0, params_from_real$var_delta)
-
-  # 3. 将随机效应映射回数据框 (安全做法)
-  # 创建临时数据框用于合并
-  sp_df <- data.frame(LTLA_name = rownames(W_mat), phi = phi_sim)
-  tm_df <- data.frame(date = unique(base_data$date), delta = delta_sim)
-
-  sim_data <- base_data %>%
-    left_join(sp_df, by = "LTLA_name") %>%
-    left_join(tm_df, by = "date")
-
-  # 4. 计算Y (h_index 效应为 1.083)
-  sim_data$linear_predictor <- params_from_real$intercept +
-    effect_size * sim_data$h_index + # 设定的效应量
-    params_from_real$retail_gr * sim_data$retail_gr +
-    params_from_real$Pop_Den_km2 * sim_data$Pop_Den_km2 +
-    params_from_real$Prosperity * sim_data$Prosperity +
-    params_from_real$week * sim_data$week +
-    params_from_real$weekend * sim_data$weekend +
-    sim_data$phi +
-    sim_data$delta
-
-  sim_data$log_GR <- sim_data$linear_predictor +
-    rnorm(nrow(sim_data), 0, sqrt(params_from_real$sigma2))
-
-  # --- B. 拟合模型 ---
-
-  res <- tryCatch(
+# 3. Simulate and refit one Hall RR on the fixed observed panel.
+# Inputs: replicate ID, RR per 5,000 students, compact generating inputs and directory.
+# Returns/saves a small result with a 95% credible interval, ESS and errors.
+# PSRF is NA for the restored single-chain simulation fits.
+# Existing successful replicates are reused only when inputs/settings match exactly.
+run_single_sim <- function(sim_id, effect, inputs, output_dir) {
+  path <- file.path(output_dir, sprintf("rr-%.3f-sim-%03d.rds", effect, sim_id))
+  seed <- 330000L + as.integer(round(1000 * effect)) * 1000L + sim_id
+  if (file.exists(path)) {
+    previous <- readRDS(path)
+    stopifnot(
+      identical(previous$signature, inputs$signature),
+      identical(previous$settings, inputs$settings),
+      previous$effect == effect,
+      previous$seed == seed
+    )
+    if (previous$status == "success") return(previous)
+  }
+  set.seed(seed)
+  started <- proc.time()[["elapsed"]]
+  result <- tryCatch(
     {
-      model <- ST.CARanova(
-        formula = log_GR ~ h_index +
-          retail_gr +
-          Pop_Den_km2 +
-          Prosperity +
-          week +
-          weekend,
-        family = "gaussian",
-        data = sim_data,
-        W = W_mat,
-        burnin = 1000,
-        n.sample = 5000,
-        thin = 1,
-        verbose = FALSE
+      n_areas <- nrow(inputs$W)
+      n_times <- nrow(inputs$chol_time)
+      phi <- as.numeric(t(inputs$chol_sp) %*% stats::rnorm(n_areas))
+      delta <- as.numeric(t(inputs$chol_time) %*% stats::rnorm(n_times))
+      phi <- phi - mean(phi)
+      delta <- delta - mean(delta)
+      beta <- inputs$beta
+      beta["h_index"] <- log(effect) / inputs$increment
+      data <- inputs$data
+      data$log_GR <- as.numeric(inputs$X %*% beta) +
+        rep(phi, n_times) +
+        rep(delta, each = n_areas) +
+        stats::rnorm(nrow(data), sd = sqrt(inputs$nu2))
+      fit <- do.call(
+        CARBayesST::ST.CARanova,
+        c(
+          list(
+            formula = inputs$formula,
+            family = "gaussian",
+            data = data,
+            W = inputs$W,
+            verbose = FALSE
+          ),
+          inputs$settings
+        )
       )
-
-      beta_samples <- model$samples$beta[, 2]
-
+      chains <- fit$samples$beta
+      draws <- if (inherits(chains, "mcmc.list")) {
+        do.call(rbind, chains)
+      } else {
+        as.matrix(chains)
+      }
+      # CARBayesST leaves beta chains unnamed; its design matrix fixes column order.
+      hall <- match("h_index", colnames(fit$X))
+      stopifnot(!is.na(hall), all(is.finite(draws[, hall])))
+      interval <- unname(stats::quantile(draws[, hall], c(0.025, 0.975)))
+      psrf <- if (inherits(chains, "mcmc.list")) {
+        coda::gelman.diag(chains, autoburnin = FALSE)$psrf[hall, 1]
+      } else {
+        NA_real_
+      }
       list(
-        sim_id = sim_id,
-        estimate = mean(beta_samples),
-        lower = quantile(beta_samples, 0.025),
-        upper = quantile(beta_samples, 0.975),
-        is_sig = ifelse(
-          quantile(beta_samples, 0.025) > 0 ||
-            quantile(beta_samples, 0.975) < 0,
-          1,
-          0
-        ),
-        status = "success"
+        estimate = mean(draws[, hall]),
+        lower = interval[1],
+        upper = interval[2],
+        is_sig = interval[1] > 0 || interval[2] < 0,
+        psrf = psrf,
+        effective = unname(coda::effectiveSize(chains)[hall]),
+        status = "success",
+        error = ""
       )
     },
     error = function(e) {
       list(
-        sim_id = sim_id,
-        estimate = NA,
-        lower = NA,
-        upper = NA,
+        estimate = NA_real_,
+        lower = NA_real_,
+        upper = NA_real_,
         is_sig = NA,
-        status = "failed"
+        psrf = NA_real_,
+        effective = NA_real_,
+        status = "failed",
+        error = conditionMessage(e)
       )
     }
   )
+  result <- c(
+    list(
+      sim_id = sim_id,
+      effect = effect,
+      seed = seed,
+      true_beta = log(effect) / inputs$increment
+    ),
+    result,
+    list(
+      seconds = proc.time()[["elapsed"]] - started,
+      signature = inputs$signature,
+      settings = inputs$settings
+    )
+  )
+  temp <- tempfile(tmpdir = output_dir)
+  on.exit(unlink(temp), add = TRUE)
+  saveRDS(result, temp)
+  if (!file.rename(temp, path)) {
+    stop("Could not save simulation: ", path)
+  }
+  message(sprintf(
+    "Hall RR %.3f: replicate %d %s (%.1f minutes)",
+    effect,
+    sim_id,
+    result$status,
+    result$seconds / 60
+  ))
+  result
+}
+# Keep the workspace out of worker exports; future requires globalenv ancestry.
+environment(run_single_sim) <- new.env(parent = globalenv())
 
-  return(res)
+# Summarise detection among successful fits, retaining the failure denominator.
+# Input: flat replicate table. Output: one row per RR with Wilson/Monte Carlo uncertainty.
+summarise.power <- function(results) {
+  do.call(
+    rbind,
+    lapply(split(results, results$effect), function(x) {
+      ok <- x$status == "success"
+      n <- sum(ok)
+      detected <- sum(x$is_sig[ok])
+      p <- if (n > 0) detected / n else NA_real_
+      z <- qnorm(0.975)
+      centre <- (p + z^2 / (2 * n)) / (1 + z^2 / n)
+      half <- z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2)) / (1 + z^2 / n)
+      data.frame(
+        effect = x$effect[1],
+        increment_students = 5000L,
+        n_attempted = nrow(x),
+        n_success = n,
+        n_failed = sum(!ok),
+        n_detected = detected,
+        power = p,
+        mc_se = sqrt(p * (1 - p) / n),
+        mc_lower = centre - half,
+        mc_upper = centre + half,
+        mean_beta = mean(x$estimate[ok]),
+        bias = mean(x$estimate[ok]) - x$true_beta[1],
+        n_psrf_available = sum(is.finite(x$psrf[ok])),
+        n_psrf_above_1.1 = if (any(is.finite(x$psrf[ok]))) {
+          sum(x$psrf[ok] > 1.1, na.rm = TRUE)
+        } else {
+          NA_integer_
+        }
+      )
+    })
+  )
 }
 
-set.seed(33)
-plan(multisession, workers = 4)
-power_list1083 <- future_lapply(
-  X = 1:100,
-  effect = 1.083,
-  FUN = run_single_sim,
-  future.seed = TRUE
+# 4. Run the two effects separately, as in the original script.
+# Each worker runs one chain on one core; never start a second cluster concurrently.
+power_cluster <- parallel::makePSOCKcluster(
+  4,
+  rscript = worker_rscript
 )
+future::plan(future::cluster, workers = power_cluster)
+set.seed(33)
+tryCatch(
+  {
+    power_list1051 <- future.apply::future_lapply(
+      X = seq_len(100L),
+      FUN = run_single_sim,
+      effect = 1.051,
+      inputs = power_inputs,
+      output_dir = result_dir,
+      future.seed = TRUE,
+      future.globals = FALSE,
+      future.chunk.size = 1L
+    )
+    power_list1013 <- future.apply::future_lapply(
+      X = seq_len(100L),
+      FUN = run_single_sim,
+      effect = 1.013,
+      inputs = power_inputs,
+      output_dir = result_dir,
+      future.seed = TRUE,
+      future.globals = FALSE,
+      future.chunk.size = 1L
+    )
+  },
+  finally = {
+    future::plan(future::sequential)
+    parallel::stopCluster(power_cluster)
+  }
+)
+
+# 5. Keep both per-effect tables and scalar powers visible in the working environment.
+power_replicates <- dplyr::bind_rows(lapply(
+  c(power_list1051, power_list1013),
+  function(x) x[setdiff(names(x), c("signature", "settings"))]
+))
+power_result_1051 <- subset(
+  power_replicates,
+  effect == 1.051 & status == "success"
+)
+power_result_1013 <- subset(
+  power_replicates,
+  effect == 1.013 & status == "success"
+)
+power1051 <- mean(power_result_1051$is_sig)
+power1013 <- mean(power_result_1013$is_sig)
+power_summary <- summarise.power(power_replicates)
+write.csv(
+  power_replicates,
+  file.path(table_dir, "Power_replicates.csv"),
+  row.names = FALSE
+)
+write.csv(
+  power_summary,
+  file.path(table_dir, "Power_summary.csv"),
+  row.names = FALSE
+)
+print(power_summary)
+
+# Historical comments retained from the previous implementation.
+# ==========================================
+# 1. 准备参数
+# ==========================================
+# h_index_real = mean(real_result_beta[, 2]), # 这个不用，我们要替换成 1.83
+# 基础数据结构
+# 预计算空间矩阵部分 (放在循环外以节省时间)
+# 使用 Leroux 结构的精度矩阵公式: Q = rho * (D - W_mat) + (1 - rho) * I
+# 注意：为了生成数据，我们需要协方差矩阵 Sigma = tau2 * Q^-1
+# 在循环内根据 rho 计算 Q 会更严谨，但如果固定 rho，可以在这里算好 Q_inv
+# Gaussian CARanova uses a Leroux precision on adjacent days as well as areas.
+# Keep spatial/temporal variance and dependence parameters separate.
+# ==========================================
+# 2. 功效分析function
+# ==========================================
+# Simulate one conditional Gaussian CARanova dataset and refit its Hall effect.
+# sim_id labels the replicate; effect is the RR per 5,000 proxy students.
+# Uses the fitted spatial/temporal Leroux parameters and observed covariates;
+# returns coefficient estimates, interval, detection flag and fit status.
+## Generate simulation data
+# 1. 生成空间随机效应 phi (考虑 rho)
+# 2. 生成时间随机效应 delta
+# 3. 将随机效应映射回数据框 (安全做法)
+# 创建临时数据框用于合并
+# 4. 计算Y (h_index 效应为 1.083)
+# --- B. 拟合模型 ---
 # power_list1018 <- future_lapply(
 #   X = 1:100,
 #   effect = 1.018,
@@ -152,29 +374,14 @@ power_list1083 <- future_lapply(
 #   FUN = run_single_sim,
 #   future.seed = TRUE
 # )
-power_list1042 <- future_lapply(
-  X = 1:100,
-  effect = 1.042,
-  FUN = run_single_sim,
-  future.seed = TRUE
-)
-plan(sequential)
-
 # ==========================================
 # 4. 结果汇总
 # ==========================================
-power_result_1083 <- bind_rows(power_list1083) %>% filter(status == "success")
 # power_result_1018 <- bind_rows(power_list1018) %>% filter(status == "success")
 # power_result_1027 <- bind_rows(power_list1027) %>% filter(status == "success")
 # power_result_1043 <- bind_rows(power_list1043) %>% filter(status == "success")
-power_result_1042 <- bind_rows(power_list1042) %>% filter(status == "success")
-
 # 计算统计量
-power1083 <- mean(power_result_1083$is_sig)
 # power1018 <- mean(power_result_1018$is_sig)
 # power1027 <- mean(power_result_1027$is_sig)
 # power1043 <- mean(power_result_1043$is_sig)
-power1042 <- mean(power_result_1042$is_sig)
-
-avg_est <- mean(power_result$estimate)
-bias <- avg_est - 1.083
+# Compare coefficients on the log-growth scale, not a coefficient against an RR.

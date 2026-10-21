@@ -1,51 +1,42 @@
-### Manual match LTLA
-set.seed(997)
-mat_base <- m.match(LTLA_mat, prop = 0.2, control_num = 1)
+# Fit the three saved single-control BSTS matching scenarios.
+for (group in c("mat_base", "mat_nolondon", "mat_over2hall")) {
+  path <- file.path(result_dir, paste0("bsts-", group, ".rds"))
+  if (
+    analysis.cached(path) &&
+      identical(read.analysis(path)$outcome, bsts_outcome)
+  ) {
+    next
+  }
+  message("BSTS: ", group, " / ", length(matches[[group]]), " matched sets")
+  fits <- future_map(
+    matches[[group]],
+    bsts_functions$fit.bsts.match,
+    observations = observations,
+    openings = HEI_dat,
+    .progress = TRUE,
+    .options = furrr_options(seed = 997)
+  )
+  report <- combine.dat(fits, matches[[group]], "table")
+  write.analysis(
+    list(
+      fits = fits,
+      matches = matches[[group]],
+      report = report,
+      outcome = bsts_outcome
+    ),
+    path,
+    bsts_prepared_file
+  )
+  rm(fits)
+  gc()
+}
 
+# Historical comments retained from the previous implementation.
+### Manual match LTLA
 ### Fit causal impact ---
 ### Manual data CI and plot
 # reopen_names <- c(paste0("B",rev(1:10)), "Reopen", paste0("A",1:30))
-reopen_names <- c(
-  paste0("—", seq(1, 10, by = 2)),
-  "Reopen",
-  paste0("+", seq(2, 30, by = 2))
-)
 ### base group, 93 paired---
-ci_m_base_gr <- vector("list", length = length(mat_base))
-plan(multicore, workers = 10) # multicore
-
-ci_m_base_gr <- future_map(
-  1:length(mat_base),
-  function(i) {
-    current_name <- names(mat_base)[i]
-    res <- do.Causal(
-      data = prep.Causal(
-        data = LTLA_gr,
-        case = get.info(data = mat_base[[i]], type = "case"),
-        control = get.info(data = mat_base[[i]], type = "control")
-      ),
-      intervention_date = get.info(
-        data = mat_base[[i]],
-        open_data = HEI_dat,
-        type = "open"
-      ),
-      ahead = 10,
-      show.fig = FALSE,
-      save.fig = FALSE,
-      original = FALSE,
-      get.table = TRUE,
-      raw.data = "series",
-      model.args = list(niter = 5000, nseasons = 7, season.duration = 1)
-    )
-    return(res)
-  },
-  .progress = TRUE,
-  .options = furrr_options(seed = 997)
-)
-
-ci_m_base_gr_table <- combine.dat(ci_m_base_gr, mat_base, "table") %>%
-  mutate(location = str_remove(.[, "record"], regex("\\d+\\_\\d+\\_"))) # 这一句之前是为了提取case LTLA的名称，现在是为了检查结果
-
 # mat_base_out <- ci_m_base_gr_table %>%
 #   mutate(
 #     abs = paste0(
@@ -74,7 +65,6 @@ ci_m_base_gr_table <- combine.dat(ci_m_base_gr, mat_base, "table") %>%
 #     )
 #   ) # ,"Relative effect median (95%CI)"
 # write_csv(mat_base_out, "outputs/table/mat_base.csv")
-
 # report.it(ci_m_base_gr, length.dat = mat_base)
 # plot.it(
 #   ci_m_base_gr,
@@ -87,54 +77,7 @@ ci_m_base_gr_table <- combine.dat(ci_m_base_gr, mat_base, "table") %>%
 #   width = 14,
 #   height = 12
 # )
-
-set.seed(997)
-mat_nolondon <- m.match(LTLA_mat_nolondon, prop = 0.2, control_num = 1)
-
 ### exclude all LTLA located in London
-ci_m_base_gr_nolon <- vector("list", length = length(mat_nolondon))
-ci_m_base_gr_nolon <- future_map(
-  1:length(mat_nolondon),
-  function(i) {
-    current_name <- names(mat_nolondon)[i]
-    res <- do.Causal(
-      data = prep.Causal(
-        data = LTLA_gr,
-        case = get.info(data = mat_nolondon[[i]], type = "case"),
-        control = get.info(data = mat_nolondon[[i]], type = "control")
-      ),
-      intervention_date = get.info(
-        data = mat_nolondon[[i]],
-        open_data = HEI_dat,
-        type = "open"
-      ),
-      ahead = 10,
-      show.fig = FALSE,
-      save.fig = FALSE,
-      original = FALSE,
-      get.table = TRUE,
-      raw.data = "series",
-      path = paste0(
-        "outputs/ci_m_base_gr_nolon/",
-        names(mat_nolondon[i]),
-        ".pdf"
-      ),
-      model.args = list(niter = 5000, nseasons = 7, season.duration = 1)
-    )
-    return(res)
-  },
-  .progress = TRUE,
-  .options = furrr_options(seed = 997)
-)
-
-
-ci_m_base_gr_nolon_table <- combine.dat(
-  ci_m_base_gr_nolon,
-  mat_nolondon,
-  "table"
-) %>%
-  mutate(location = str_remove(.[, "record"], regex("\\d+\\_\\d+\\_")))
-
 # mat_nolon_out <- ci_m_base_gr_nolon_table %>%
 #   mutate(
 #     abs = paste0(
@@ -162,7 +105,6 @@ ci_m_base_gr_nolon_table <- combine.dat(
 #     )
 #   )
 # write_csv(mat_nolon_out, "outputs/table/mat_nolondon.csv")
-
 # report.it(ci_m_base_gr_nolon, length.dat = mat_nolondon)
 # plot.it(
 #   ci_m_base_gr_nolon,
@@ -174,49 +116,7 @@ ci_m_base_gr_nolon_table <- combine.dat(
 #   width = 14,
 #   height = 12
 # )
-
-set.seed(997)
-mat_over2hall <- m.match(LTLA_mat_hall, prop = 0.2, control_num = 1)
-
 ### find control in LTLA with over 2 halls
-ci_m_base_gr_over2 <- vector("list", length = length(mat_over2hall))
-ci_m_base_gr_over2 <- future_map(
-  1:length(mat_over2hall),
-  function(i) {
-    current_name <- names(mat_over2hall)[i]
-    res <- do.Causal(
-      data = prep.Causal(
-        data = LTLA_gr,
-        case = get.info(data = mat_over2hall[[i]], type = "case"),
-        control = get.info(data = mat_over2hall[[i]], type = "control")
-      ),
-      intervention_date = get.info(
-        data = mat_over2hall[[i]],
-        open_data = HEI_dat,
-        type = "open"
-      ),
-      ahead = 10,
-      show.fig = FALSE,
-      save.fig = FALSE,
-      original = FALSE,
-      get.table = TRUE,
-      raw.data = "series",
-      model.args = list(niter = 5000, nseasons = 7, season.duration = 1)
-    )
-    return(res)
-  },
-  .progress = TRUE,
-  .options = furrr_options(seed = 997)
-)
-
-
-ci_m_base_gr_over2_table <- combine.dat(
-  ci_m_base_gr_over2,
-  mat_over2hall,
-  "table"
-) %>%
-  mutate(location = str_remove(.[, "record"], regex("\\d+\\_\\d+\\_")))
-
 # over2_out <- ci_m_base_gr_over2_table %>%
 #   mutate(
 #     abs = paste0(
@@ -244,7 +144,6 @@ ci_m_base_gr_over2_table <- combine.dat(
 #     )
 #   )
 # write_csv(over2_out, "outputs/table/over2.csv")
-
 # report.it(ci_m_base_gr_over2, length.dat = mat_over2hall)
 # plot.it(
 #   ci_m_base_gr_over2,
@@ -256,5 +155,3 @@ ci_m_base_gr_over2_table <- combine.dat(
 #   width = 14,
 #   height = 12
 # )
-
-plan(sequential)

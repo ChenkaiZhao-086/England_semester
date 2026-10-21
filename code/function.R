@@ -56,13 +56,23 @@ x11.save <- function(fig = fig, file = file, width = width, height = height) {
 } # When change default graphic device from Quartz to Cairo, we can save plot by gg.save. It's seems we do not need this function anymore. By the way, open a separate Cairo window is much faster than the bottom right on mac
 
 # For match LTLA ----------------------------------------------------------
-# Calculate moving average OR rolling sum case number
+# Calculate trailing means/sums or weekly totals from daily case counts.
+# data contains dated LTLA counts; daily zeros are replaced by 0.5 before
+# aggregation. Missing counts remain missing. Returns the dated count table.
 case.cal <- function(
   start_date = "2020-06-01",
   end_date = "2020-12-01",
   type = c("MA", "RS", "week"),
   data
 ) {
+  data <- data %>%
+    mutate(
+      newCasesBySpecimenDate = if_else(
+        newCasesBySpecimenDate == 0,
+        0.5,
+        newCasesBySpecimenDate
+      )
+    )
   switch(
     type,
     "MA" = {
@@ -465,6 +475,9 @@ prep.Causal <- function(
 }
 
 
+# Fit BSTS for the supplied dated case/control series. Returns the requested report
+# and/or raw state/predictive draws; raw outputs also carry their calendar dates.
+# The reopening date ends the pre-period; post-period starts at day 1.
 do.Causal <- function(
   start_date = NULL,
   intervention_date = NULL,
@@ -549,7 +562,8 @@ do.Causal <- function(
 
     res_list <- list(
       raw_mean = raw_mean,
-      raw_sample = raw_sample
+      raw_sample = raw_sample,
+      dates = time.points[timecheck]
     )
   } else if (raw.data == "series") {
     raw_mean <- as.data.frame(impact[["raw_mean"]]) %>% setNames(., time.points)
@@ -564,7 +578,8 @@ do.Causal <- function(
 
     res_list <- list(
       raw_mean = raw_mean,
-      raw_sample = raw_sample
+      raw_sample = raw_sample,
+      dates = time.points[timecheck]
     )
   }
 
@@ -572,10 +587,37 @@ do.Causal <- function(
     res_list <- list(
       table = table,
       raw_mean = raw_mean,
-      raw_sample = raw_sample
+      raw_sample = raw_sample,
+      dates = time.points[timecheck]
     )
   }
   return(res_list)
+}
+
+# Fit one matched LTLA set with the existing BSTS settings.
+# matched is one case/control match table; observations and openings are the
+# dated outcome and HEI opening tables. Returns do.Causal report and dated draws.
+# All inputs are explicit so workers need no enclosing analysis workspace.
+fit.bsts.match <- function(matched, observations, openings) {
+  do.Causal(
+    data = prep.Causal(
+      data = observations,
+      case = get.info(data = matched, type = "case"),
+      control = get.info(data = matched, type = "control")
+    ),
+    intervention_date = get.info(
+      data = matched,
+      open_data = openings,
+      type = "open"
+    ),
+    ahead = 10,
+    show.fig = FALSE,
+    save.fig = FALSE,
+    original = FALSE,
+    get.table = TRUE,
+    raw.data = "series",
+    model.args = list(niter = 5000, nseasons = 7, season.duration = 1)
+  )
 }
 
 combine.dat <- function(
@@ -892,522 +934,94 @@ plot.it <- function(
   plot(finalplot)
 }
 
-cal.cum.ci.region <- function(
-  data,
-  m.data,
-  table,
-  # region_num, # 新增：N_num → N_region 映射表，与 cal.cum.ci 中的 region_num 一致
-  select.length = 42
-  # title = NULL,
-  # save = FALSE,
-  # path = NULL,
-  # width = NULL,
-  # height = NULL
-) {
-  # ── Step 1: 构建 subclass 索引（与 cal.cum.ci 完全一致）─────────────────────
-  matched_tbl <- do.call(bind_rows, m.data) %>%
-    drop_na() %>%
-    arrange(N_num) %>%
-    split(., .$N_num) %>%
-    map(., \(df) df$subclass)
+# Historical optional arguments for the disabled plotting code below:
+# region_num, # 新增：N_num → N_region 映射表，与 cal.cum.ci 中的 region_num 一致
+# title = NULL,
+# save = FALSE,
+# path = NULL,
+# width = NULL,
+# height = NULL
+# # ── Step 7: 逐组绘图，以 N_region 命名列表 ──────────────────────────────────
+# n_total <- length(group_info_list)
+# plot_list <- setNames(
+#   vector("list", n_total),
+#   sapply(group_info_list, `[[`, "n_region")
+# )
 
-  N_num_values <- names(matched_tbl) # character 型，如 "1","2",...
-  n_groups <- length(matched_tbl)
+# for (i in seq_len(n_total)) {
+#   grp <- group_info_list[[i]]
 
-  # ── Step 2: 获取 N_num -> N_region 映射（与 cal.cum.ci tidy.out=T 一致）──────
-  region_code <- table %>%
-    left_join(region_num, by = "N_num") %>%
-    dplyr::select(N_num, N_region) %>%
-    arrange(N_num) %>%
-    distinct(.keep_all = TRUE)
+#   plot_title <- if (!is.null(title)) {
+#     paste0(title, "  (", grp$n_region, ")")
+#   } else {
+#     grp$n_region
+#   }
 
-  # ── Step 3: 按 N_num 组提取数据并计算累积效应 ────────────────────────────────
-  raw_mean_list <- vector("list", n_groups)
-  raw_sample_list <- vector("list", n_groups)
-  mean_meta_list <- vector("list", n_groups)
-  before_open_meta_list <- vector("list", n_groups)
+#   p <- data.frame(date = seq_len(select.length), grp$cum_table) %>%
+#     setNames(c("date", "median", "lci", "uci")) %>%
+#     ggplot(aes(x = date)) +
+#     geom_vline(
+#       xintercept = 11,
+#       linewidth = 1.2,
+#       linetype = 2,
+#       colour = "#bc3b29"
+#     ) +
+#     geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+#     geom_ribbon(
+#       aes(ymin = exp(lci), ymax = exp(uci)),
+#       alpha = 0.1,
+#       colour = "#275066",
+#       fill = "#275066"
+#     ) +
+#     geom_line(aes(y = exp(median)), linewidth = 2, colour = "#082243") +
+#     scale_x_continuous(
+#       name = "Date",
+#       breaks = seq(1, select.length, by = 2),
+#       labels = c(
+#         paste0("-", rev(seq(2, 10, by = 2))),
+#         "Reopen",
+#         paste0("+", seq(2, select.length - 11, by = 2))
+#       )
+#     ) +
+#     scale_y_continuous(
+#       name = "Cumulative difference in log growth rate\nbetween case LTLA and control LTLA(s)",
+#       breaks = -3:5,
+#       expand = c(0, 0)
+#     ) +
+#     labs(title = plot_title, tag = grp$tag) +
+#     theme_bw() +
+#     theme(
+#       axis.text = element_text(size = 14, colour = "black"),
+#       axis.title = element_text(size = 16, face = "bold", colour = "black"),
+#       plot.title = element_text(size = 18, face = "bold", colour = "black"),
+#       plot.margin = unit(c(0.5, 1, 0.5, 1), "cm"),
+#       plot.tag = element_text(size = 18),
+#       plot.tag.position = c(0, 1)
+#     )
 
-  for (i in seq_len(n_groups)) {
-    index <- unlist(matched_tbl[i]) %>% unname()
+#   plot_list[[i]] <- p
 
-    raw_mean_all <- map(index, ~ data[[.x]]$raw_mean) %>%
-      do.call(bind_rows, .) %>%
-      .[, 1:select.length]
+#   if (isTRUE(save) && !is.null(path)) {
+#     # 将 N_region 名称中的特殊字符替换为下划线，确保文件名合法
+#     safe_name <- gsub("[^A-Za-z0-9_]", "_", grp$n_region)
+#     save_path <- sub("(\\.\\w+)$", paste0("_", safe_name, "\\1"), path)
+#     ggsave(
+#       filename = save_path,
+#       plot = p,
+#       width = width,
+#       height = height,
+#       units = "in"
+#     )
+#   }
+# }
 
-    raw_sample_all <- map(index, ~ data[[.x]]$raw_sample) %>%
-      do.call(bind_rows, .) %>%
-      .[, 1:select.length]
-
-    before_open_all <- map(index, function(.x) {
-      LTLA_gr %>%
-        filter(
-          LTLA_name == table[.x, "location"] &
-            date >= (as.Date(table[.x, "int_date"]) - 10)
-        ) %>%
-        dplyr::select(newCasesBySpecimenDate) %>%
-        t() %>%
-        as.data.frame()
-    }) %>%
-      do.call(bind_rows, .) %>%
-      .[, 1:select.length]
-
-    raw_mean_list[[i]] <- raw_mean_all
-    raw_sample_list[[i]] <- raw_sample_all
-    mean_meta_list[[i]] <- map_dbl(
-      raw_mean_all,
-      ~ quantile(.x, 0.5, na.rm = TRUE)
-    )
-    before_open_meta_list[[i]] <- map_dbl(
-      before_open_all,
-      ~ quantile(.x, 0.5, na.rm = TRUE)
-    )
-  }
-
-  cum_table_list <- pmap(
-    list(raw_sample_list, mean_meta_list, before_open_meta_list, 12),
-    cum.pred
-  )
-
-  # ── Step 4: All region 累积效应（与 plot.it 完全一致）──────────────────────
-  before_open_all_region <- before.dat(table, select.length = select.length)
-
-  raw_mean_all_region <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_mean",
-    select.length = select.length
-  )
-  mean_meta_all_region <- apply(raw_mean_all_region, 2, FUN = function(x) {
-    quantile(x, 0.5, na.rm = TRUE)
-  })
-
-  raw_sample_all_region <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_sample",
-    select.length = select.length
-  )
-  cum_table_all_region <- cum.pred(
-    raw_sample_all_region,
-    mean_meta_all_region,
-    before_open_all_region,
-    12
-  )
-
-  # ── Step 5: 构建含标识列的 raw_plot_data ────────────────────────────────────
-  # 各 N_num 组附加标识列
-  cum_table_labeled_list <- map2(
-    cum_table_list,
-    seq_len(n_groups),
-    function(tbl, i) {
-      n_val <- as.integer(N_num_values[i])
-      n_region <- region_code %>%
-        filter(N_num == n_val) %>%
-        pull(N_region)
-      n_region <- if (length(n_region) == 0) NA_character_ else n_region[1]
-
-      tbl %>%
-        mutate(
-          date = seq_len(select.length),
-          N_num = n_val,
-          N_region = n_region
-        ) %>%
-        relocate(date, N_num, N_region)
-    }
-  )
-
-  # All region 附加标识列
-  cum_table_all_labeled <- cum_table_all_region %>%
-    mutate(
-      date = seq_len(select.length),
-      N_num = 0L,
-      N_region = "All region"
-    ) %>%
-    relocate(date, N_num, N_region)
-
-  # 合并为完整原始数据框（All region 排首行）
-  raw_plot_data <- bind_rows(cum_table_all_labeled, cum_table_labeled_list)
-
-  # ── Step 6: 构建统一绘图信息列表（All region 排第一）────────────────────────
-  group_info_list <- c(
-    list(list(
-      cum_table = cum_table_all_region,
-      n_num = 0L,
-      n_region = "All region",
-      tag = "(All). "
-    )),
-    map(seq_len(n_groups), function(i) {
-      n_val <- as.integer(N_num_values[i])
-      n_region <- region_code %>%
-        filter(N_num == n_val) %>%
-        pull(N_region)
-      n_region <- if (length(n_region) == 0) NA_character_ else n_region[1]
-      list(
-        cum_table = cum_table_list[[i]],
-        n_num = n_val,
-        n_region = n_region,
-        tag = paste0("(", i, "). ")
-      )
-    })
-  )
-
-  # # ── Step 7: 逐组绘图，以 N_region 命名列表 ──────────────────────────────────
-  # n_total <- length(group_info_list)
-  # plot_list <- setNames(
-  #   vector("list", n_total),
-  #   sapply(group_info_list, `[[`, "n_region")
-  # )
-
-  # for (i in seq_len(n_total)) {
-  #   grp <- group_info_list[[i]]
-
-  #   plot_title <- if (!is.null(title)) {
-  #     paste0(title, "  (", grp$n_region, ")")
-  #   } else {
-  #     grp$n_region
-  #   }
-
-  #   p <- data.frame(date = seq_len(select.length), grp$cum_table) %>%
-  #     setNames(c("date", "median", "lci", "uci")) %>%
-  #     ggplot(aes(x = date)) +
-  #     geom_vline(
-  #       xintercept = 11,
-  #       linewidth = 1.2,
-  #       linetype = 2,
-  #       colour = "#bc3b29"
-  #     ) +
-  #     geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
-  #     geom_ribbon(
-  #       aes(ymin = exp(lci), ymax = exp(uci)),
-  #       alpha = 0.1,
-  #       colour = "#275066",
-  #       fill = "#275066"
-  #     ) +
-  #     geom_line(aes(y = exp(median)), linewidth = 2, colour = "#082243") +
-  #     scale_x_continuous(
-  #       name = "Date",
-  #       breaks = seq(1, select.length, by = 2),
-  #       labels = c(
-  #         paste0("-", rev(seq(2, 10, by = 2))),
-  #         "Reopen",
-  #         paste0("+", seq(2, select.length - 11, by = 2))
-  #       )
-  #     ) +
-  #     scale_y_continuous(
-  #       name = "Cumulative difference in log growth rate\nbetween case LTLA and control LTLA(s)",
-  #       breaks = -3:5,
-  #       expand = c(0, 0)
-  #     ) +
-  #     labs(title = plot_title, tag = grp$tag) +
-  #     theme_bw() +
-  #     theme(
-  #       axis.text = element_text(size = 14, colour = "black"),
-  #       axis.title = element_text(size = 16, face = "bold", colour = "black"),
-  #       plot.title = element_text(size = 18, face = "bold", colour = "black"),
-  #       plot.margin = unit(c(0.5, 1, 0.5, 1), "cm"),
-  #       plot.tag = element_text(size = 18),
-  #       plot.tag.position = c(0, 1)
-  #     )
-
-  #   plot_list[[i]] <- p
-
-  #   if (isTRUE(save) && !is.null(path)) {
-  #     # 将 N_region 名称中的特殊字符替换为下划线，确保文件名合法
-  #     safe_name <- gsub("[^A-Za-z0-9_]", "_", grp$n_region)
-  #     save_path <- sub("(\\.\\w+)$", paste0("_", safe_name, "\\1"), path)
-  #     ggsave(
-  #       filename = save_path,
-  #       plot = p,
-  #       width = width,
-  #       height = height,
-  #       units = "in"
-  #     )
-  #   }
-  # }
-
-  # for (p in plot_list) {
-  #   plot(p)
-  # }
-  # invisible(list(
-  #   plots = plot_list,
-  #   raw_plot_data = raw_plot_data
-  # ))
-  return(raw_plot_data)
-}
-
-
-cal.cum.ci <- function(data, m.data, table, select.length = 42, tidy.out = F) {
-  # ← ① 默认值 41 → 42
-  matched_tbl <- do.call(bind_rows, m.data) %>%
-    drop_na() %>%
-    arrange(N_num) %>%
-    split(., .$N_num) %>%
-    map(., \(df) df$subclass)
-
-  raw_mean_list <- list()
-  raw_sample_list <- list()
-  before_open_list <- list()
-  for (i in 1:length(matched_tbl)) {
-    index <- unlist(matched_tbl[i]) %>% unname()
-    raw_mean_table_list <- map(index, ~ data[[.x]]$raw_mean)
-    raw_sample_table_list <- map(index, ~ data[[.x]]$raw_sample)
-    before_open_table_list <- map(index, function(.x) {
-      LTLA_gr %>%
-        filter(
-          LTLA_name == table[.x, "location"] &
-            date >= (as.Date(table[.x, "int_date"]) - 10)
-        ) %>%
-        dplyr::select(newCasesBySpecimenDate) %>%
-        t() %>%
-        as.data.frame()
-    })
-
-    raw_mean_all <- do.call(bind_rows, raw_mean_table_list)
-    raw_mean_all <- raw_mean_all[, 1:select.length]
-    raw_mean_list[[i]] <- raw_mean_all
-
-    raw_sample_all <- do.call(bind_rows, raw_sample_table_list)
-    raw_sample_all <- raw_sample_all[, 1:select.length]
-    raw_sample_list[[i]] <- raw_sample_all
-
-    before_open_all <- do.call(bind_rows, before_open_table_list)
-    before_open_all <- before_open_all[, 1:select.length]
-    before_open_list[[i]] <- before_open_all
-  }
-
-  mean_meta_list <- map(
-    raw_mean_list,
-    ~ map_dbl(.x, ~ quantile(.x, 0.5, na.rm = TRUE))
-  )
-  before_open_meta_list <- map(
-    before_open_list,
-    ~ map_dbl(.x, ~ quantile(.x, 0.5, na.rm = TRUE))
-  )
-
-  cum_table <- pmap(
-    list(raw_sample_list, mean_meta_list, before_open_meta_list, 12),
-    cum.pred
-  )
-
-  before_open <- before.dat(table, select.length = select.length)
-  raw_mean <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_mean",
-    select.length = select.length
-  )
-  mean_meta <- apply(raw_mean, 2, FUN = function(x) {
-    quantile(x, c(0.5), na.rm = T)
-  })
-  raw_sample <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_sample",
-    select.length = select.length
-  )
-  cum_table_all <- cum.pred(raw_sample, mean_meta, before_open, 12)
-
-  if (tidy.out == T) {
-    label <- c("day3", "day7", "day14", "day30") # ← ② 新增 "day30"
-    region_code <- table %>%
-      left_join(., region_num, by = "N_num") %>%
-      dplyr::select(N_num, N_region) %>%
-      arrange(N_num) %>%
-      distinct(., .keep_all = T)
-
-    cum_table_all <- cum_table_all %>%
-      slice(., c(12 + 3, 12 + 7, 12 + 14, 12 + 30)) %>% # ← ③ 新增 12+30
-      exp() %>%
-      round(., digits = 2) %>%
-      format(., nsmall = 2) %>%
-      mutate(
-        cum.ci = paste0(
-          cum.effect,
-          " (",
-          cum.effect.lower,
-          ", ",
-          cum.effect.upper,
-          ")"
-        ),
-        label = label,
-        N_num = 0,
-        N_region = "All region"
-      ) %>%
-      dplyr::select(cum.ci, label, N_num, N_region) %>%
-      pivot_wider(names_from = "label", values_from = cum.ci) %>%
-      relocate(starts_with("N"))
-
-    cum_table_tidy <- cum_table %>%
-      map(
-        .,
-        ~ format(
-          round(
-            exp(slice(.x, c(12 + 3, 12 + 7, 12 + 14, 12 + 30))),
-            digits = 2
-          ), # ← ④ 新增 12+30
-          nsmall = 2
-        ) %>%
-          mutate(
-            cum.ci = paste0(
-              cum.effect,
-              " (",
-              cum.effect.lower,
-              ", ",
-              cum.effect.upper,
-              ")"
-            ),
-            label = label
-          ) %>%
-          dplyr::select(cum.ci, label) %>%
-          pivot_wider(names_from = "label", values_from = cum.ci)
-      ) %>%
-      do.call(bind_rows, .) %>%
-      bind_cols(., region_code) %>%
-      relocate(starts_with("N"))
-
-    cum_table_tidy <- bind_rows(cum_table_all, cum_table_tidy)
-    return(cum_table_tidy)
-  } else {
-    return(cum_table)
-  }
-}
-
-cal.cum.ci.LTLA <- function(
-  data,
-  m.data,
-  table,
-  select.length = 42,
-  tidy.out = FALSE
-) {
-  BASELINE <- 12L # 基线期行数
-  ALL_DAYS <- c(day3 = 3L, day7 = 7L, day14 = 14L, day30 = 30L)
-  # ── 1. 构建 subclass 级别的分组信息 ──────────────────────────────────────
-  # 合并所有匹配结果，按 subclass 分组，
-  # 取每组中 N_num 不为 NA 的行（即处理单元）的 LTLA_name 作为标签
-  subclass_info <- do.call(bind_rows, m.data) %>%
-    group_by(subclass) %>%
-    summarize(
-      subclass_name = LTLA_name[!is.na(N_num)][1], # 处理单元名称
-      N_num = N_num[!is.na(N_num)][1], # 保留 N_num 供输出使用
-      .groups = "drop"
-    ) %>%
-    arrange(subclass)
-
-  sc_idx <- subclass_info$subclass # subclass 编号向量
-
-  # ── 2. 工具函数 ──────────────────────────────────────────────────────────
-  # trim_cols <- function(df) df[, seq_len(select.length), drop = FALSE]
-
-  # robust trim_cols: coerce to data.frame and select up to available columns
-  trim_cols <- function(df, len = select.length) {
-    actual_len <- min(len, ncol(df)) # ← 核心修复
-    df[, seq_len(actual_len), drop = FALSE]
-  }
-  col_median <- function(df) map_dbl(df, ~ quantile(.x, 0.5, na.rm = TRUE))
-
-  # ── 3. 按 subclass 逐个提取数据并计算累积因果效应 ────────────────────────
-  # 每个 subclass 对应一次干预，独立完成一次 cum.pred 计算
-  cum_table <- map(sc_idx, function(sc) {
-    raw_mean <- trim_cols(data[[sc]]$raw_mean)
-    raw_sample <- trim_cols(data[[sc]]$raw_sample)
-    before_open <- LTLA_gr %>%
-      filter(
-        LTLA_name == table[sc, "location"],
-        date >= as.Date(table[sc, "int_date"]) - 10
-      ) %>%
-      dplyr::select(newCasesBySpecimenDate) %>%
-      t() %>%
-      as.data.frame() %>%
-      trim_cols()
-
-    cum.pred(raw_sample, col_median(raw_mean), col_median(before_open), 12)
-  })
-
-  # tidy.out = FALSE 时直接返回各 subclass 的完整时间序列列表
-  if (!tidy.out) {
-    return(cum_table)
-  }
-
-  # # ── 4. 全局合并计算（仅 tidy.out = TRUE 时执行）──────────────────────────
-  before_open_g <- before.dat(table, select.length = select.length)
-  raw_mean_g <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_mean",
-    select.length = select.length
-  )
-  raw_sample_g <- combine.dat(
-    data = data,
-    length.dat = m.data,
-    type = "raw_sample",
-    select.length = select.length
-  )
-  mean_meta_g <- apply(raw_mean_g, 2, quantile, 0.5, na.rm = TRUE)
-  cum_all <- cum.pred(raw_sample_g, mean_meta_g, before_open_g, 12)
-
-  # ── 5. 整洁化输出 ────────────────────────────────────────────────────────
-  label <- c("day3", "day7", "day14", "day30")
-  slice_rows <- 12 + c(3, 7, 14, 30)
-
-  # 将单个 cum.pred 结果格式化为一行宽格式
-  make_tidy_row <- function(ct, n_num, n_region) {
-    # 1. 计算该 subclass 实际可用的最大天数
-    max_avail_day <- nrow(ct) - BASELINE
-
-    # 2. 筛选出数据量足够的节点（e.g. 数据不足30天时只保留 day3/day7/day14）
-    avail_days <- ALL_DAYS[ALL_DAYS <= max_avail_day]
-
-    # 3. 若连3天都不够则跳过，返回 NULL
-    if (length(avail_days) == 0) {
-      warning(sprintf(
-        "地区 '%s' 可用数据不足 %d 天，已跳过",
-        n_region,
-        min(ALL_DAYS)
-      ))
-      return(NULL)
-    }
-
-    # 4. 计算可用节点的效应
-    effects <- ct %>%
-      slice(BASELINE + avail_days) %>%
-      exp() %>%
-      round(digits = 2) %>%
-      format(nsmall = 2) %>%
-      mutate(
-        cum.ci = paste0(
-          cum.effect,
-          " (",
-          cum.effect.lower,
-          ", ",
-          cum.effect.upper,
-          ")"
-        ),
-        label = names(avail_days)
-      ) %>%
-      dplyr::select(cum.ci, label) %>%
-      pivot_wider(names_from = "label", values_from = "cum.ci")
-
-    # 5. 补全缺失的天数列为 NA，保持输出列结构一致
-    missing_cols <- setdiff(names(ALL_DAYS), names(effects))
-    effects[missing_cols] <- NA_character_
-
-    effects %>%
-      mutate(N_num = n_num, N_region = n_region) %>%
-      relocate(N_num, N_region, names(ALL_DAYS)) # 固定列顺序
-  }
-
-  # 全局汇总行（N_num = 0）
-  global_row <- make_tidy_row(cum_all, n_num = 0, n_region = "All region")
-
-  # 各 subclass 行：用处理单元的 LTLA_name 作为 N_region 标签
-  per_sc_rows <- pmap_dfr(
-    list(cum_table, subclass_info$N_num, subclass_info$subclass_name),
-    make_tidy_row
-  )
-
-  bind_rows(global_row, per_sc_rows)
-}
-
+# for (p in plot_list) {
+#   plot(p)
+# }
+# invisible(list(
+#   plots = plot_list,
+#   raw_plot_data = raw_plot_data
+# ))
 
 # Auto correlation --------------------------------------------------------
 
@@ -1421,40 +1035,44 @@ get.decay.par <- function(sim.data) {
   return(par)
 }
 
+# Build a daily influence kernel for offsets 0:decay.period after reopening.
+# incubation is the offset with weight 1; decay.fun is evaluated at subsequent
+# offsets x = 1, 2, ... . Returns zero before onset and has no support after the window.
 gen.decay <- function(decay.period, decay.fun, incubation) {
-  x <- 1:decay.period
-  y <- eval(parse(text = decay.fun))[1:(decay.period - 2)]
-  inc.time <- rep(0, incubation)
-  time1 <- c(inc.time, 1, y, 0)
-  return(time1)
+  stopifnot(decay.period >= 0, incubation >= 0)
+  weights <- numeric(decay.period + 1L)
+  if (incubation <= decay.period) {
+    weights[incubation + 1L] <- 1
+    x <- seq_len(decay.period - incubation)
+    if (length(x)) weights[incubation + 1L + x] <- eval(parse(text = decay.fun))
+  }
+  weights
 }
 
+# Apply a day-offset influence kernel to dated, same-day-summed opening pulses.
+# dat is one LTLA frame with date and h_index; decay is the gen.decay vector.
+# Returns the date-sorted frame with convolved h_index. Actual dates, rather than
+# row offsets, ensure missing observations cannot shift the exposure window.
 get.index <- function(dat, decay) {
-  h.indes_matrix <- cbind(
-    expand.grid(
-      h.index = dat$h_index,
-      weight = decay
-    ),
-    expand.grid(
-      h.index_c = c(1:length(dat$h_index)),
-      weight_c = 1:length(decay)
-    )
-  )
-  h.indes_matrix$value <- h.indes_matrix$h.index * h.indes_matrix$weight
-  h.indes_matrix$day <- h.indes_matrix$h.index_c + h.indes_matrix$weight_c - 1
-
-  h_dat <- dat %>%
-    dplyr::select(!contains("h_index"))
-
-  h_index_dat <- h.indes_matrix %>%
-    group_by(day) %>%
-    filter(day <= length(dat$h_index)) %>%
-    summarise(h_index = sum(value))
-
-  result <- cbind(h_dat, h_index_dat[, 2])
-  return(result)
+  dat <- dat[order(dat$date), ]
+  dates <- as.Date(dat$date)
+  exposure <- numeric(nrow(dat))
+  for (i in which(dat$h_index != 0)) {
+    target <- match(dates[i] + seq_along(decay) - 1L, dates)
+    keep <- !is.na(target)
+    exposure[target[keep]] <- exposure[target[keep]] +
+      dat$h_index[i] * decay[keep]
+  }
+  dat$h_index <- exposure
+  dat
 }
 
+
+# Format the legacy fixed-effect table from CARBayesST model Dat.
+# data supplies covariate SDs; unit selects the reporting scale and digits rounding.
+# The student scale uses 5,000 proxy students / 40,485 at unit temporal weight,
+# not measured returns. Returns the legacy rounded matrix; its centre exponentiates
+# the coefficient mean (the historical column label is "50%").
 get.RR <- function(
   Dat,
   data = NA,
@@ -1491,9 +1109,9 @@ get.RR <- function(
     }
   } else {
     # h index
-    res_matrix[1, 1] <- round(exp(5000 / 40382 * Dat[2, 1]), digits)
-    res_matrix[1, 2] <- round(exp(5000 / 40382 * Dat[2, 2]), digits)
-    res_matrix[1, 3] <- round(exp(5000 / 40382 * Dat[2, 3]), digits)
+    res_matrix[1, 1] <- round(exp(5000 / 40485 * Dat[2, 1]), digits)
+    res_matrix[1, 2] <- round(exp(5000 / 40485 * Dat[2, 2]), digits)
+    res_matrix[1, 3] <- round(exp(5000 / 40485 * Dat[2, 3]), digits)
     if (Num.row - 8 > 2) {
       # retail gr
       res_matrix[2, 1] <- round(exp(0.6 * Dat[3, 1]), digits)
@@ -1737,357 +1355,6 @@ get.risk <- function(
 #   return(rbind(table2_bs_all, table2_bs_tidy))
 # }
 
-cal.cum.bs.LTLA <- function(rawdata, region_data, eff_data) {
-  # ── 准备公共数据 ────────────────────────────────────────────────────────────
-  first_row <- rawdata %>%
-    left_join(region_data) %>%
-    dplyr::select(starts_with("LTLA"), date, h_index) %>%
-    arrange(LTLA_ID) %>%
-    group_by(LTLA_ID) %>%
-    mutate(row_num = row_number()) %>%
-    filter(h_index > 0) %>%
-    slice(1) %>%
-    dplyr::select(-c(h_index, date))
-
-  eff_name <- suppressMessages(
-    rawdata %>%
-      dplyr::select(starts_with("LTLA"), date) %>%
-      bind_cols(eff_data)
-  )
-
-  # ── 直接按 LTLA_ID 分割，每个 LTLA 为独立单元 ─────────────────────────────
-  split_dat <- rawdata %>%
-    left_join(region_data) %>%
-    dplyr::select(starts_with("LTLA"), starts_with("N"), date, h_index) %>%
-    left_join(., first_row) %>%
-    arrange(LTLA_ID) %>%
-    group_by(LTLA_ID) %>%
-    filter(
-      row_number() >= row_num &
-        row_number() <= row_num + 30
-    ) %>%
-    left_join(., eff_name) %>%
-    split(., .$LTLA_ID) # ← 关键改动：直接按 LTLA_ID 拆分
-
-  # ── 天数 → cumsum 行号映射 ─────────────────────────────────────────────────
-  # 第1行 = day0(基线), 第4行 = day3, 第8行 = day7, 第15行 = day14, 第31行 = day30
-  day_row_map <- c(day3 = 4L, day7 = 8L, day14 = 15L, day30 = 31L)
-  all_labels <- names(day_row_map)
-
-  # ── 启动并行集群 ────────────────────────────────────────────────────────────
-  n_cores <- max(1, detectCores() - 1)
-  cl <- makeCluster(n_cores)
-  registerDoParallel(cl)
-  on.exit(stopCluster(cl), add = TRUE)
-
-  # ── 按 LTLA_ID 并行计算累积效应 ────────────────────────────────────────────
-  table2_bs_list <- foreach(
-    i = seq_along(split_dat),
-    .combine = bind_rows,
-    .packages = c("dplyr", "tidyr"),
-    .export = c("day_row_map", "all_labels")
-  ) %dopar%
-    {
-      df <- split_dat[[i]]
-      ltla_id <- df$LTLA_ID[1]
-      ltla_name <- df$LTLA_name[1]
-      n_rows <- nrow(df)
-
-      # ── 动态筛选可计算的天数（核心修复）──────────────────────────────────────
-      # 例：nrow = 20，则 day30(需31行)被过滤，只保留 day3/day7/day14
-      avail_rows <- day_row_map[day_row_map <= n_rows]
-
-      if (length(avail_rows) == 0) {
-        # 连 day3 都不够（< 4行），返回全 NA 占位行
-        message(sprintf(
-          "[跳过] LTLA_ID=%s (%s): 仅有 %d 行，不足以计算任何节点效应",
-          ltla_id,
-          ltla_name,
-          n_rows
-        ))
-        result <- as.data.frame(
-          matrix(NA_character_, nrow = 1, ncol = length(all_labels))
-        )
-        names(result) <- all_labels
-        result$LTLA_ID <- as.character(ltla_id)
-        result$LTLA_name <- ltla_name
-        return(dplyr::relocate(result, LTLA_ID, LTLA_name))
-      }
-
-      # ── 提取 bootstrap 效应列（去除含"_"或"date"的元数据列）─────────────────
-      numeric_data <- df %>%
-        ungroup() %>%
-        dplyr::select(-c(contains("_"), contains("date")))
-
-      # ── 行方向分位数 → 累积和（列方向）──────────────────────────────────────
-      cum_mat <- numeric_data %>%
-        apply(1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))) %>%
-        t() %>%
-        apply(2, cumsum) %>%
-        as.data.frame()
-
-      # ── 只取有数据的行，格式化为 "median (lower, upper)" ─────────────────────
-      cum_sliced <- cum_mat %>%
-        slice(unname(avail_rows)) %>%
-        exp() %>%
-        round(digits = 2) %>%
-        format(nsmall = 2) %>%
-        mutate(
-          cum.bs = paste0(`50%`, " (", `2.5%`, ", ", `97.5%`, ")"),
-          label = names(avail_rows)
-        ) %>%
-        dplyr::select(cum.bs, label) %>%
-        pivot_wider(names_from = "label", values_from = cum.bs)
-
-      # ── 不可计算的天数列补 NA，保证所有行输出结构一致 ────────────────────────
-      missing_cols <- setdiff(all_labels, names(cum_sliced))
-      cum_sliced[missing_cols] <- NA_character_
-
-      cum_sliced %>%
-        mutate(
-          LTLA_ID = ltla_id,
-          LTLA_name = ltla_name
-        ) %>%
-        dplyr::relocate(LTLA_ID, LTLA_name, all_of(all_labels))
-    }
-
-  return(table2_bs_list)
-}
-
-cal.cum.bs <- function(rawdata, region_data, eff_data) {
-  # ── 准备公共数据 ────────────────────────────────────────────────────────────
-  first_row <- rawdata %>%
-    left_join(region_data) %>%
-    dplyr::select(starts_with("LTLA"), date, h_index) %>%
-    arrange(LTLA_ID) %>%
-    group_by(LTLA_ID) %>%
-    mutate(row_num = row_number()) %>%
-    filter(h_index > 0) %>%
-    slice(1) %>%
-    dplyr::select(-c(h_index, date))
-
-  eff_name <- suppressMessages(
-    rawdata %>%
-      dplyr::select(starts_with("LTLA"), date) %>%
-      bind_cols(eff_data)
-  )
-
-  split_dat <- rawdata %>%
-    left_join(region_data) %>%
-    dplyr::select(starts_with("LTLA"), starts_with("N"), date, h_index) %>%
-    left_join(., first_row) %>%
-    arrange(LTLA_ID) %>%
-    group_by(LTLA_ID) %>%
-    filter(
-      row_number() >= row_num &
-        row_number() <= row_num + 30
-    ) %>%
-    arrange(N_num) %>%
-    left_join(., eff_name) %>%
-    split(., .$N_num) %>%
-    map(., function(x) {
-      ungroup(x) %>%
-        group_by(LTLA_ID) %>%
-        split(., .$LTLA_ID)
-    })
-
-  label <- c("day3", "day7", "day14", "day30")
-  n_num_values <- names(split_dat) # character，如 "1","2",...，与 split() 排序一致
-
-  # N_num → N_region 映射（用于组装 raw_plot_data 时查找 N_region）
-  n_num_region_map <- region_data %>%
-    dplyr::select(N_num, N_region) %>%
-    distinct()
-
-  # ── 启动并行集群 ────────────────────────────────────────────────────────────
-  n_cores <- max(1, detectCores() - 1)
-  cl <- makeCluster(n_cores)
-  registerDoParallel(cl)
-  on.exit(stopCluster(cl), add = TRUE)
-
-  # ── Part 1: 按 N_num 组并行计算 ────────────────────────────────────────────
-  # 关键改动：每次迭代返回 list(summary = ..., plot_data = ...)
-  # 不指定 .combine，foreach 默认以 list 收集结果
-  results_list <- foreach(
-    i = seq_along(split_dat),
-    .packages = c("dplyr", "tidyr", "purrr"),
-    .export = c("label")
-  ) %dopar%
-    {
-      df <- split_dat[[i]]
-
-      # [FIX A] 过滤行数不足 31 的 LTLA
-      row_counts <- sapply(df, nrow)
-      df <- df[row_counts >= 31]
-
-      # 过滤后无可用 LTLA：返回 NA 占位
-      if (length(df) == 0) {
-        return(list(
-          summary = setNames(
-            as.data.frame(matrix(
-              NA_character_,
-              nrow = 1,
-              ncol = length(label)
-            )),
-            label
-          ),
-          plot_data = data.frame(
-            date = seq_len(31),
-            cum.effect = NA_real_,
-            cum.effect.lower = NA_real_,
-            cum.effect.upper = NA_real_
-          )
-        ))
-      }
-
-      # 计算完整 31 行累积时序（对数尺度，与 plot.it.by.Nnum 一致，不 exp()）
-      cum_full <- do.call(cbind, df) %>%
-        dplyr::select(-c(contains("_"), contains("date"))) %>%
-        apply(., 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))) %>%
-        t() %>%
-        apply(., 2, cumsum) %>%
-        as.data.frame() # 列名: "50%", "2.5%", "97.5%"
-
-      # ① 汇总行（原有逻辑，4 个时间点，exp 后格式化）── 完全不变
-      summary_row <- cum_full %>%
-        slice(c(4, 8, 15, 31)) %>%
-        exp() %>%
-        round(digits = 2) %>%
-        format(nsmall = 2) %>%
-        mutate(
-          cum.bs = paste0(`50%`, " (", `2.5%`, ", ", `97.5%`, ")"),
-          label = label
-        ) %>%
-        dplyr::select(cum.bs, label) %>%
-        pivot_wider(names_from = "label", values_from = cum.bs)
-
-      # ② 绘图数据（全 31 行，对数尺度，列名与 raw_plot_data 一致）── 新增
-      plot_data <- cum_full %>%
-        setNames(c("cum.effect", "cum.effect.lower", "cum.effect.upper")) %>%
-        mutate(date = row_number()) %>%
-        relocate(date)
-
-      list(summary = summary_row, plot_data = plot_data)
-    }
-
-  # 拆分：summary 路径（原逻辑）和 plot_data 路径（新增）
-  table2_bs_list <- do.call(bind_rows, map(results_list, "summary"))
-  plot_data_groups <- map(results_list, "plot_data")
-
-  # 原有汇总表组装逻辑，完全不变
-  table2_bs_tidy <- region_data %>%
-    dplyr::select(contains("N_")) %>%
-    distinct() %>%
-    bind_cols(., table2_bs_list) %>%
-    relocate(N_num)
-
-  # ── Part 2: All region 并行计算 ────────────────────────────────────────────
-  ltla_list <- rawdata %>%
-    left_join(region_data) %>%
-    dplyr::select(starts_with("LTLA"), starts_with("N"), date, h_index) %>%
-    left_join(., first_row) %>%
-    arrange(LTLA_ID) %>%
-    group_by(LTLA_ID) %>%
-    filter(
-      row_number() >= row_num &
-        row_number() <= row_num + 30
-    ) %>%
-    left_join(., eff_name) %>%
-    split(., .$LTLA_ID)
-
-  all_row_counts <- sapply(ltla_list, nrow)
-  excluded_global <- names(all_row_counts)[all_row_counts < 31]
-
-  if (length(excluded_global) > 0) {
-    message(sprintf(
-      "[All region] 排除 %d 个数据不足的 LTLA: %s",
-      length(excluded_global),
-      paste(excluded_global, collapse = ", ")
-    ))
-  }
-
-  ltla_list <- ltla_list[all_row_counts >= 31]
-
-  data_block <- ltla_list %>%
-    map(function(x) {
-      ungroup(x) %>% dplyr::select(-c(contains("_"), contains("date")))
-    }) %>%
-    split(., ceiling(seq_along(.) / 12))
-
-  combine_list <- foreach(
-    j = seq_along(data_block),
-    .combine = "list",
-    .multicombine = TRUE,
-    .packages = c("dplyr")
-  ) %dopar%
-    {
-      do.call(cbind, data_block[[j]])
-    }
-
-  combine_block <- do.call(cbind, combine_list)
-
-  # All region 完整累积时序（对数尺度）── 原有管道拆分为两段
-  cum_full_all <- combine_block %>%
-    apply(., 1, FUN = function(x) quantile(x, c(0.5, 0.025, 0.975))) %>%
-    t() %>%
-    apply(., 2, cumsum) %>%
-    as.data.frame() # 列名: "50%", "2.5%", "97.5%"
-
-  # All region 汇总行（原有逻辑，完全不变）
-  table2_bs_all <- cum_full_all %>%
-    slice(c(4, 8, 15, 31)) %>%
-    exp() %>%
-    round(digits = 2) %>%
-    format(nsmall = 2) %>%
-    mutate(
-      cum.bs = paste0(`50%`, " (", `2.5%`, ", ", `97.5%`, ")"),
-      label = label
-    ) %>%
-    dplyr::select(cum.bs, label) %>%
-    pivot_wider(names_from = "label", values_from = cum.bs) %>%
-    mutate(N_num = 0, N_region = "All region") %>%
-    relocate(starts_with("N"))
-
-  summary_table <- rbind(table2_bs_all, table2_bs_tidy)
-
-  # ── 组装 raw_plot_data（新增）──────────────────────────────────────────────
-  # 各 N_num 组：附加 N_num / N_region 标识列
-  plot_data_by_group <- map2(
-    plot_data_groups,
-    seq_along(plot_data_groups),
-    function(pd, i) {
-      n_val <- as.integer(n_num_values[i])
-      n_reg <- n_num_region_map %>%
-        filter(N_num == n_val) %>%
-        pull(N_region)
-      n_reg <- if (length(n_reg) == 0) NA_character_ else n_reg[1]
-
-      pd %>%
-        mutate(N_num = n_val, N_region = n_reg) %>%
-        relocate(date, N_num, N_region)
-    }
-  )
-
-  # All region：附加标识列（N_num = 0，与 plot.it.by.Nnum 一致）
-  plot_data_all_region <- cum_full_all %>%
-    setNames(c("cum.effect", "cum.effect.lower", "cum.effect.upper")) %>%
-    mutate(
-      date = row_number(),
-      N_num = 0L,
-      N_region = "All region"
-    ) %>%
-    relocate(date, N_num, N_region)
-
-  # 合并（All region 排首，与 plot.it.by.Nnum 的 raw_plot_data 结构一致）
-  raw_plot_data <- bind_rows(plot_data_all_region, plot_data_by_group)
-
-  # ── 返回 ────────────────────────────────────────────────────────────────────
-  return(list(
-    summary_table = summary_table,
-    raw_plot_data = raw_plot_data
-  ))
-}
-
 # get.daily.risk.bs <- function(
 #   rawdata,
 #   eff_data,
@@ -2205,3 +1472,492 @@ cal.cum.bs <- function(rawdata, region_data, eff_data) {
 
 #   return(final_result)
 # }
+
+# Write a named list of stage objects plus reproducibility metadata to an RDS file.
+# dependencies are upstream file paths; hashes prevent mixing incompatible stages.
+# Returns the output path invisibly; the previous file survives a failed write.
+write.analysis <- function(objects, path, dependencies = character()) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  stopifnot(all(file.exists(dependencies)))
+  code_files <- list.files("code", pattern = "\\.R$", full.names = TRUE)
+  result <- list(
+    version = "day1-D-v1",
+    dependencies = tools::md5sum(dependencies),
+    metadata = list(
+      created = Sys.time(),
+      session = sessionInfo(),
+      code_md5 = tools::md5sum(code_files)
+    ),
+    objects = objects
+  )
+  temp <- tempfile(tmpdir = dirname(path))
+  on.exit(unlink(temp), add = TRUE)
+  saveRDS(result, temp)
+  if (!file.rename(temp, path)) {
+    stop("Could not replace result file: ", path)
+  }
+  invisible(path)
+}
+
+# Read a stage checkpoint and return its named object list.
+# Rejects old formats or changed/missing upstream files; never starts a model.
+read.analysis <- function(path) {
+  result <- readRDS(path)
+  if (!identical(result$version, "day1-D-v1")) {
+    stop("Rebuild outdated checkpoint: ", path)
+  }
+  deps <- result$dependencies
+  if (
+    length(deps) &&
+      (!all(file.exists(names(deps))) ||
+        !identical(deps, tools::md5sum(names(deps))))
+  ) {
+    stop("Upstream inputs changed; rebuild checkpoint: ", path)
+  }
+  result$objects
+}
+
+# Fit a CAR model, save it immediately, and return a compact CARBayesST object.
+# ... are ST.CARanova arguments; seed fixes this fit independently of other stages.
+# input_file identifies the prepared checkpoint used for provenance validation.
+# Parameter chains, diagnostics and fitted summaries are retained. Per-observation
+# fitted draws are omitted unless england.keep_full_models requests a separate file.
+fit.car <- function(
+  result_name,
+  seed,
+  input_file = file.path(result_dir, "prepared.rds"),
+  ...
+) {
+  set.seed(seed)
+  args <- list(...)
+  model <- do.call(ST.CARanova, args)
+  settings <- args[setdiff(names(args), c("data", "W"))]
+  settings$seed <- seed
+  # Formula environments must not serialize the entire stage workspace.
+  if (inherits(model$formula, "formula")) {
+    environment(model$formula) <- baseenv()
+  }
+  if (inherits(settings$formula, "formula")) {
+    environment(settings$formula) <- baseenv()
+  }
+  attr(model, "fit_settings") <- settings
+  dependency <- input_file
+  if (isTRUE(getOption("england.keep_full_models", FALSE))) {
+    write.analysis(
+      list(model = model),
+      file.path(result_dir, paste0(result_name, "-full.rds")),
+      dependency
+    )
+  }
+  model$samples$fitted <- NULL
+  write.analysis(
+    list(model = model),
+    file.path(result_dir, paste0(result_name, ".rds")),
+    dependency
+  )
+  model
+}
+
+# Describe a linear covariate contrast without allocating observation-by-draw arrays.
+# model is a CARBayesST fit; covariate names its beta column; baseline is the reference.
+# Unnamed CARBayesST chains use the column order of the saved design matrix X.
+# Returns only the covariate name, baseline and pooled coefficient samples.
+car.effect <- function(model, covariate, baseline = 0) {
+  chains <- model$samples$beta
+  beta <- if (inherits(chains, "mcmc.list")) {
+    do.call(rbind, chains)
+  } else {
+    as.matrix(chains)
+  }
+  if (is.null(colnames(beta))) {
+    colnames(beta) <- colnames(model$X)
+  }
+  list(covariate = covariate, baseline = baseline, beta = beta[, covariate])
+}
+
+# Format a log-effect curve at days 3, 7, 14 and 30 as one wide RR row.
+# curve contains date, cum.effect and lower/upper limits; unavailable days remain NA.
+# Returns day3/day7/day14/day30 character columns, with no metadata columns.
+effect.row <- function(curve) {
+  days <- c(3L, 7L, 14L, 30L)
+  cols <- c("cum.effect", "cum.effect.lower", "cum.effect.upper")
+  values <- exp(as.matrix(curve[match(days, curve$date), cols, drop = FALSE]))
+  labels <- ifelse(
+    is.na(values[, 1]),
+    NA_character_,
+    sprintf("%.2f (%.2f, %.2f)", values[, 1], values[, 2], values[, 3])
+  )
+  as.data.frame(as.list(setNames(labels, paste0("day", days))))
+}
+
+# Align CAR covariates to actual reopening dates; return one small frame per LTLA.
+# rawdata includes reopen_date and the requested covariate; region_data maps LTLA IDs.
+# Day 0 is baseline, days 1:30 are follow-up. Missing dates end usable follow-up.
+car.paths <- function(rawdata, region_data, effect) {
+  dat <- rawdata %>%
+    transmute(
+      LTLA_ID,
+      LTLA_name,
+      date = as.Date(date),
+      day = as.integer(as.Date(date) - as.Date(reopen_date)),
+      exposure = .data[[effect$covariate]] - effect$baseline
+    ) %>%
+    filter(!is.na(day), day >= 1, day <= 30) %>%
+    left_join(
+      distinct(region_data, LTLA_ID, N_num, N_region),
+      by = "LTLA_ID"
+    ) %>%
+    arrange(LTLA_ID, day)
+  split(dat, dat$LTLA_ID)
+}
+
+# Compute one group's cumulative CAR curve without full effect matrices or workers.
+# paths are car.paths frames; beta is a coefficient-draw vector. Returns days 0:30
+# and n_ltla. At each horizon only complete LTLA trajectories contribute. The existing
+# pooled daily quantiles followed by cumulative sums are deliberately retained.
+car.curve <- function(paths, beta) {
+  available <- vapply(
+    paths,
+    function(p) {
+      ok <- match(1:30, p$day)
+      sum(cumprod(!is.na(ok) & is.finite(p$exposure[ok])))
+    },
+    numeric(1)
+  )
+  curves <- vector("list", 31)
+  previous <- integer()
+  cumulative <- NULL
+  for (day in 0:30) {
+    eligible <- which(available >= day & available > 0)
+    value <- rep(NA_real_, 3)
+    if (day == 0) {
+      value <- rep(0, 3)
+    }
+    if (day > 0 && length(eligible)) {
+      # Reuse the daily quantiles until the complete-follow-up cohort changes.
+      if (!identical(eligible, previous)) {
+        daily <- vapply(
+          seq_len(min(available[eligible])),
+          function(d) {
+            x <- vapply(
+              paths[eligible],
+              function(p) p$exposure[match(d, p$day)],
+              numeric(1)
+            )
+            quantile(
+              as.vector(outer(x, beta)),
+              c(0.5, 0.025, 0.975),
+              names = FALSE
+            )
+          },
+          numeric(3)
+        )
+        cumulative <- daily
+        if (ncol(daily) > 1) {
+          for (d in 2:ncol(daily)) {
+            cumulative[, d] <- cumulative[, d - 1] + daily[, d]
+          }
+        }
+        previous <- eligible
+      }
+      value <- cumulative[, day]
+    }
+    curves[[day + 1L]] <- data.frame(
+      date = day,
+      cum.effect = value[1],
+      cum.effect.lower = value[2],
+      cum.effect.upper = value[3],
+      n_ltla = length(eligible)
+    )
+  }
+  bind_rows(curves)
+}
+
+# Return LTLA-specific RR summaries for compact CAR effects.
+# Inputs are the model data, region lookup and car.effect descriptor; unavailable
+# horizons are NA. Output columns are LTLA_ID, LTLA_name and day3/day7/day14/day30.
+cal.cum.bs.LTLA <- function(rawdata, region_data, eff_data) {
+  paths <- car.paths(rawdata, region_data, eff_data)
+  bind_rows(lapply(paths, function(p) {
+    bind_cols(
+      p[1, c("LTLA_ID", "LTLA_name")],
+      effect.row(car.curve(list(p), eff_data$beta))
+    )
+  }))
+}
+
+# Return region/global CAR summaries, plot curves and per-horizon denominators.
+# eff_data is a car.effect descriptor (not a dense matrix). Region pooling is unchanged;
+# date is days since actual reopening, and each horizon uses complete follow-up only.
+cal.cum.bs <- function(rawdata, region_data, eff_data) {
+  paths <- car.paths(rawdata, region_data, eff_data)
+  regions <- region_data %>% distinct(N_num, N_region) %>% arrange(N_num)
+  regions <- bind_rows(data.frame(N_num = 0, N_region = "All region"), regions)
+  curves <- lapply(seq_len(nrow(regions)), function(i) {
+    selected <- if (regions$N_num[i] == 0) {
+      paths
+    } else {
+      Filter(
+        function(p) !is.na(p$N_num[1]) && p$N_num[1] == regions$N_num[i],
+        paths
+      )
+    }
+    bind_cols(regions[rep(i, 31), ], car.curve(selected, eff_data$beta))
+  })
+  summary <- bind_rows(lapply(seq_along(curves), function(i) {
+    bind_cols(regions[i, ], effect.row(curves[[i]]))
+  }))
+  plot_data <- bind_rows(curves) %>% relocate(date, N_num, N_region)
+  list(
+    summary_table = summary,
+    raw_plot_data = plot_data,
+    counts = dplyr::select(plot_data, N_num, N_region, date, n_ltla)
+  )
+}
+
+# Build per-LTLA BSTS paths from do.Causal results, matched tables and observations.
+# Results must carry calendar dates. Return only days 1:30, state draws, cumulative
+# predictive draws and observed responses; no missing follow-up is imputed.
+bsts.paths <- function(data, m.data, table) {
+  lapply(seq_along(data), function(i) {
+    case <- m.data[[i]] %>% filter(type == 1) %>% slice(1) %>% ungroup()
+    days <- as.integer(as.Date(data[[i]]$dates) - as.Date(table$int_date[i]))
+    columns <- which(days >= 1 & days <= 30)
+    dates <- as.Date(data[[i]]$dates[columns])
+    observed <- LTLA_gr %>% filter(LTLA_ID == case$LTLA_ID[1]) %>% arrange(date)
+    y <- observed$newCasesBySpecimenDate[match(dates, as.Date(observed$date))]
+    samples <- as.matrix(data[[i]]$raw_sample)[, columns, drop = FALSE]
+    states <- as.matrix(data[[i]]$raw_mean)[, columns, drop = FALSE]
+    # Limit to the consecutive, fully observed prefix of days 1:30.
+    valid <- days[columns] == seq_along(columns) &
+      is.finite(y) &
+      colSums(!is.finite(samples)) == 0 &
+      colSums(!is.finite(states)) == 0
+    n <- sum(cumprod(valid))
+    samples <- samples[, seq_len(n), drop = FALSE]
+    cumulative <- samples
+    if (n > 1) {
+      for (d in 2:n) {
+        cumulative[, d] <- cumulative[, d - 1] + samples[, d]
+      }
+    }
+    list(
+      LTLA_ID = case$LTLA_ID[1],
+      LTLA_name = case$LTLA_name[1],
+      N_num = case$N_num[1],
+      observed = y[seq_len(n)],
+      states = states[, seq_len(n), drop = FALSE],
+      cumulative = cumulative,
+      n = n
+    )
+  })
+}
+
+# Compute pooled BSTS cumulative effects for days 0:30 and report n_ltla.
+# paths come from bsts.paths. At each horizon, pool only complete LTLA trajectories.
+# Retains the existing medians of observations/states and pooled predictive intervals;
+# this is not a newly defined posterior of a regional average effect.
+bsts.curve <- function(paths) {
+  available <- vapply(paths, function(p) p$n, numeric(1))
+  curves <- vector("list", 31)
+  previous <- integer()
+  for (day in 0:30) {
+    eligible <- which(available >= day & available > 0)
+    value <- rep(NA_real_, 3)
+    if (day == 0) {
+      value <- rep(0, 3)
+    }
+    if (day > 0 && length(eligible)) {
+      if (!identical(eligible, previous)) {
+        selected <- paths[eligible]
+        days <- seq_len(min(available[eligible]))
+        observed <- cumsum(vapply(
+          days,
+          function(d) {
+            median(vapply(selected, function(p) p$observed[d], numeric(1)))
+          },
+          numeric(1)
+        ))
+        predicted <- cumsum(vapply(
+          days,
+          function(d) {
+            median(unlist(
+              lapply(selected, function(p) p$states[, d]),
+              use.names = FALSE
+            ))
+          },
+          numeric(1)
+        ))
+        previous <- eligible
+      }
+      limits <- quantile(
+        unlist(
+          lapply(selected, function(p) p$cumulative[, day]),
+          use.names = FALSE
+        ),
+        c(0.025, 0.975),
+        names = FALSE
+      )
+      value <- c(
+        observed[day] - predicted[day],
+        observed[day] - limits[2],
+        observed[day] - limits[1]
+      )
+    }
+    curves[[day + 1L]] <- data.frame(
+      date = day,
+      cum.effect = value[1],
+      cum.effect.lower = value[2],
+      cum.effect.upper = value[3],
+      n_ltla = length(eligible)
+    )
+  }
+  bind_rows(curves)
+}
+
+# Return regional/global BSTS plot curves on calendar-aligned days 0:30.
+# data/m.data/table are matching do.Causal, match and report outputs; select.length
+# remains a compatibility argument (41 = ten pre-days + day 0 + thirty post-days).
+cal.cum.ci.region <- function(data, m.data, table, select.length = 41) {
+  paths <- bsts.paths(data, m.data, table)
+  regions <- table %>%
+    dplyr::select(N_num) %>%
+    distinct() %>%
+    left_join(region_num, by = "N_num") %>%
+    arrange(N_num)
+  regions <- bind_rows(data.frame(N_num = 0, N_region = "All region"), regions)
+  bind_rows(lapply(seq_len(nrow(regions)), function(i) {
+    selected <- if (regions$N_num[i] == 0) {
+      paths
+    } else {
+      Filter(function(p) p$N_num == regions$N_num[i], paths)
+    }
+    bind_cols(regions[rep(i, 31), ], bsts.curve(selected))
+  })) %>%
+    relocate(date, N_num, N_region)
+}
+
+# Return BSTS regional RR summaries, or regional curves when tidy.out is FALSE.
+# Inputs match cal.cum.ci.region; unavailable 3/7/14/30-day horizons remain NA.
+cal.cum.ci <- function(
+  data,
+  m.data,
+  table,
+  select.length = 41,
+  tidy.out = FALSE
+) {
+  curves <- cal.cum.ci.region(data, m.data, table, select.length)
+  groups <- split(curves, curves$N_num)
+  if (!tidy.out) {
+    return(groups[names(groups) != "0"])
+  }
+  bind_rows(lapply(groups, function(p) {
+    bind_cols(p[1, c("N_num", "N_region")], effect.row(p))
+  }))
+}
+
+# Return global and LTLA-specific BSTS RR summaries (or curves when tidy.out is FALSE).
+# Inputs match bsts.paths; the legacy N_region column carries the LTLA name.
+# All incomplete horizons remain NA, including LTLAs with fewer than three post-days.
+cal.cum.ci.LTLA <- function(
+  data,
+  m.data,
+  table,
+  select.length = 41,
+  tidy.out = FALSE
+) {
+  # trim_cols <- function(df) df[, seq_len(select.length), drop = FALSE]
+  paths <- bsts.paths(data, m.data, table)
+  curves <- lapply(paths, function(p) bsts.curve(list(p)))
+  if (!tidy.out) {
+    return(curves)
+  }
+  global <- bind_cols(
+    data.frame(N_num = 0, N_region = "All region"),
+    effect.row(bsts.curve(paths))
+  )
+  per_ltla <- bind_rows(lapply(seq_along(paths), function(i) {
+    bind_cols(
+      data.frame(N_num = paths[[i]]$N_num, N_region = paths[[i]]$LTLA_name),
+      effect.row(curves[[i]])
+    )
+  }))
+  bind_rows(global, per_ltla)
+}
+
+# Keep whole areas with finite outcomes/covariates on the full study calendar.
+# Input: dated panel and numeric column names. Output: date-major balanced panel.
+complete.panel <- function(data, variables) {
+  ids <- data %>%
+    summarise(
+      ok = n_distinct(date) == 188L &&
+        n() == 188L &&
+        all(is.finite(as.matrix(pick(all_of(variables))))),
+      .by = LTLA_ID
+    ) %>%
+    filter(ok)
+  data %>% filter(LTLA_ID %in% ids$LTLA_ID) %>% arrange(date, LTLA_ID)
+}
+
+# Check whether a saved model still matches its recorded input files.
+# Input: checkpoint path. Output: TRUE for a reusable model, otherwise FALSE.
+# Used only in explicit fitting stages; summaries never refit stale models.
+analysis.cached <- function(path) {
+  if (!file.exists(path)) {
+    return(FALSE)
+  }
+  tryCatch(
+    {
+      read.analysis(path)
+      TRUE
+    },
+    error = function(e) {
+      message("Refitting checkpoint: ", path, " (", conditionMessage(e), ")")
+      FALSE
+    }
+  )
+}
+
+# Fit or reuse one named CAR specification on its prepared balanced panel.
+# Inputs: a one-row spec with model/outcome/hall/mobility/calendar columns,
+# date-major data, named spatial matrix, seed, prepared path and core count.
+# All covariates must be observed. The stage result_dir must be dirname(input_file).
+# Saves the usual compact stage checkpoint; returns NULL invisibly.
+fit.car.specification <- function(spec, data, W, seed, input_file, n.cores) {
+  path <- file.path(dirname(input_file), paste0("car-", spec$model, ".rds"))
+  if (analysis.cached(path)) {
+    return(invisible(NULL))
+  }
+  areas <- data$LTLA_name[data$date == min(data$date)]
+  formula <- reformulate(
+    c(
+      spec$hall,
+      spec$mobility[spec$mobility != ""],
+      "Pop_Den_km2",
+      "Prosperity",
+      "week",
+      spec$calendar
+    ),
+    response = spec$outcome
+  )
+  message("CAR ", spec$model, ": ", nrow(data), " rows")
+  model <- fit.car(
+    result_name = paste0("car-", spec$model),
+    seed = seed,
+    input_file = input_file,
+    formula = formula,
+    family = "gaussian",
+    data = data,
+    W = W[areas, areas],
+    burnin = 10000,
+    n.sample = 110000,
+    thin = 100,
+    n.chains = 4,
+    n.cores = n.cores,
+    interaction = TRUE,
+    verbose = FALSE
+  )
+  rm(model)
+  gc()
+  invisible(NULL)
+}

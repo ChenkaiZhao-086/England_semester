@@ -1,22 +1,9 @@
 ### This scrip is used to plot the distribution of 12 regions
 
 map_dat_region <- Eng_shp %>%
-  full_join(
+  left_join(
     .,
-    LTLA_dat_combine %>%
-      dplyr::select("LTLA_name", "N_region") %>%
-      bind_rows(
-        .,
-        data.frame(
-          LTLA_name = c(
-            "Cornwall",
-            "Isles of Scilly",
-            "Hackney",
-            "City of London"
-          ),
-          N_region = c("South West", "South West", "London", "London")
-        )
-      ),
+    old$LTLA_dat %>% distinct(LTLA_name, N_region),
     by = c("LAD19NM" = "LTLA_name")
   ) %>%
   st_transform(., crs = 4326)
@@ -40,7 +27,7 @@ ggsave(
       legend.text = element_text(size = 10),
       legend.box.just = "center"
     ),
-  filename = "outputs/appendix_region_name.pdf",
+  filename = file.path(plot_dir, "appendix_region_name.pdf"),
   width = 9,
   height = 14
 )
